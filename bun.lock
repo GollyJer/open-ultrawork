@@ -263,6 +263,7 @@
       "version": "1.2.5",
       "bin": {
         "opencode": "./bin/opencode",
+        "ultrawork": "./bin/ultrawork",
       },
       "dependencies": {
         "@actions/core": "1.11.1",
