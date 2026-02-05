@@ -70,7 +70,7 @@ function truncateResult(text: string): string {
 
 export interface BatchResult {
   id: string
-  status: "completed" | "failed"
+  status: "pending" | "completed" | "failed"
   description: string
   result?: string
   error?: string

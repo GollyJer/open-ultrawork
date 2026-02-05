@@ -25,7 +25,10 @@ const activeBatches = new Map<
     completed: number
     failed: number
     notified: boolean
-    results: Map<string, { status: "completed" | "failed"; result?: string; error?: string; description: string }>
+    results: Map<
+      string,
+      { status: "pending" | "completed" | "failed"; result?: string; error?: string; description: string }
+    >
   }
 >()
 
@@ -206,7 +209,7 @@ export namespace TaskManager {
       activeBatches.set(batchId, batch)
     }
     batch.total++
-    batch.results.set(taskId, { status: "completed", description }) // Placeholder until completion
+    batch.results.set(taskId, { status: "pending", description })
   }
 
   /**
