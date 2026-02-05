@@ -1,0 +1,3310 @@
+diff --git a/packages/opencode/src/cli/cmd/acp.ts b/packages/opencode/src/cli/cmd/acp.ts
+index c607e5f5b..abe7ceabd 100644
+--- a/packages/opencode/src/cli/cmd/acp.ts
++++ b/packages/opencode/src/cli/cmd/acp.ts
+@@ -38,7 +38,7 @@ export const AcpCommand = cmd({
+   },
+   handler: async (args) => {
+     await bootstrap(process.cwd(), async () => {
+-      const server = Server.listen({
++      const server = await Server.listen({
+         port: args.port,
+         hostname: args.hostname,
+       })
+diff --git a/packages/opencode/src/cli/cmd/run.ts b/packages/opencode/src/cli/cmd/run.ts
+index c57711b4c..75c19d46e 100644
+--- a/packages/opencode/src/cli/cmd/run.ts
++++ b/packages/opencode/src/cli/cmd/run.ts
+@@ -286,7 +286,7 @@ export const RunCommand = cmd({
+     }
+ 
+     await bootstrap(process.cwd(), async () => {
+-      const server = Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1" })
++      const server = await Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1" })
+       const sdk = createOpencodeClient({ baseUrl: `http://${server.hostname}:${server.port}` })
+ 
+       if (args.command) {
+diff --git a/packages/opencode/src/cli/cmd/serve.ts b/packages/opencode/src/cli/cmd/serve.ts
+index 3af3316a9..3be156863 100644
+--- a/packages/opencode/src/cli/cmd/serve.ts
++++ b/packages/opencode/src/cli/cmd/serve.ts
+@@ -20,7 +20,7 @@ export const ServeCommand = cmd({
+   handler: async (args) => {
+     const hostname = args.hostname
+     const port = args.port
+-    const server = Server.listen({
++    const server = await Server.listen({
+       port,
+       hostname,
+     })
+diff --git a/packages/opencode/src/cli/cmd/tui/spawn.ts b/packages/opencode/src/cli/cmd/tui/spawn.ts
+index fa6795298..85c7680ca 100644
+--- a/packages/opencode/src/cli/cmd/tui/spawn.ts
++++ b/packages/opencode/src/cli/cmd/tui/spawn.ts
+@@ -24,7 +24,7 @@ export const TuiSpawnCommand = cmd({
+       }),
+   handler: async (args) => {
+     upgrade()
+-    const server = Server.listen({
++    const server = await Server.listen({
+       port: args.port,
+       hostname: "127.0.0.1",
+     })
+diff --git a/packages/opencode/src/cli/cmd/tui/worker.ts b/packages/opencode/src/cli/cmd/tui/worker.ts
+index 76f78f3fa..990d0b7db 100644
+--- a/packages/opencode/src/cli/cmd/tui/worker.ts
++++ b/packages/opencode/src/cli/cmd/tui/worker.ts
+@@ -33,7 +33,7 @@ export const rpc = {
+   async server(input: { port: number; hostname: string }) {
+     if (server) await server.stop(true)
+     try {
+-      server = Server.listen(input)
++      server = await Server.listen(input)
+       return {
+         url: server.url.toString(),
+       }
+diff --git a/packages/opencode/src/cli/cmd/web.ts b/packages/opencode/src/cli/cmd/web.ts
+index 3d3036b1b..b3b7e224b 100644
+--- a/packages/opencode/src/cli/cmd/web.ts
++++ b/packages/opencode/src/cli/cmd/web.ts
+@@ -45,7 +45,7 @@ export const WebCommand = cmd({
+   handler: async (args) => {
+     const hostname = args.hostname
+     const port = args.port
+-    const server = Server.listen({
++    const server = await Server.listen({
+       port,
+       hostname,
+     })
+diff --git a/packages/opencode/src/config/config.ts b/packages/opencode/src/config/config.ts
+index d895c3f1e..2f03cb78c 100644
+--- a/packages/opencode/src/config/config.ts
++++ b/packages/opencode/src/config/config.ts
+@@ -11,7 +11,13 @@ import { lazy } from "../util/lazy"
+ import { NamedError } from "@opencode-ai/util/error"
+ import { Flag } from "../flag/flag"
+ import { Auth } from "../auth"
+-import { type ParseError as JsoncParseError, applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
++import {
++  type ParseError as JsoncParseError,
++  applyEdits,
++  modify,
++  parse as parseJsonc,
++  printParseErrorCode,
++} from "jsonc-parser"
+ import { Instance } from "../project/instance"
+ import { LSPServer } from "../lsp/server"
+ import { BunProc } from "@/bun"
+@@ -693,6 +699,25 @@ export namespace Config {
+         })
+         .optional(),
+       tools: z.record(z.string(), z.boolean()).optional(),
++      task: z
++        .object({
++          maxConcurrent: z
++            .number()
++            .int()
++            .positive()
++            .optional()
++            .default(5)
++            .describe("Maximum number of concurrent tasks per session (default: 5)"),
++          timeoutMs: z
++            .number()
++            .int()
++            .positive()
++            .optional()
++            .default(15 * 60 * 1000)
++            .describe("Timeout in milliseconds for task execution (default: 15 minutes)"),
++        })
++        .optional()
++        .describe("Task system configuration"),
+       enterprise: z
+         .object({
+           url: z.string().optional().describe("Enterprise URL"),
+diff --git a/packages/opencode/src/server/server.ts b/packages/opencode/src/server/server.ts
+index f98670be3..2f0ac241f 100644
+--- a/packages/opencode/src/server/server.ts
++++ b/packages/opencode/src/server/server.ts
+@@ -46,6 +46,7 @@ import { SessionStatus } from "@/session/status"
+ import { upgradeWebSocket, websocket } from "hono/bun"
+ import { errors } from "./error"
+ import { Pty } from "@/pty"
++import { initOrphanCleanup } from "../task/orphan.js"
+ 
+ // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
+ globalThis.AI_SDK_LOG_WARNINGS = false
+@@ -2450,7 +2451,12 @@ export namespace Server {
+     return result
+   }
+ 
+-  export function listen(opts: { port: number; hostname: string }) {
++  export async function listen(opts: { port: number; hostname: string }) {
++    // Clean up any orphaned tasks from previous runs
++    await initOrphanCleanup()
++
++    // Note: No need to start TaskRunner - we use fire-and-forget per-task runners
++
+     const server = Bun.serve({
+       port: opts.port,
+       hostname: opts.hostname,
+diff --git a/packages/opencode/src/task/anti-polling.ts b/packages/opencode/src/task/anti-polling.ts
+new file mode 100644
+index 000000000..8b59140f9
+--- /dev/null
++++ b/packages/opencode/src/task/anti-polling.ts
+@@ -0,0 +1,63 @@
++/**
++ * Single source of truth for anti-polling messaging.
++ * Ensures consistent emoji usage and wording across all task outputs.
++ */
++
++/**
++ * Standard warning for tool outputs/descriptions.
++ * @returns "🚫 DO NOT POLL. YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE>."
++ */
++export function standardWarning(): string {
++  return "🚫 DO NOT POLL. YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE>."
++}
++
++/**
++ * Instruction for using task_read after receiving notification.
++ * @returns "If you need the full result for this task, call task_read once after this notification."
++ */
++export function taskReadAfterNotification(): string {
++  return "If you need the full result for this task, call task_read once after this notification."
++}
++
++/**
++ * Reminder for notifications when there are remaining tasks running.
++ * @param remainingCount Number of tasks still queued or running
++ * @returns Multi-line reminder with warning, mention, and task_read guidance
++ */
++export function reminderRemaining(remainingCount: number): string {
++  return [
++    "⚠️ Do NOT poll task_read or task_list - continue productive work.",
++    taskReadAfterNotification(),
++    "You WILL be notified as each task completes.",
++  ].join(" ")
++}
++
++/**
++ * Final reminder for notifications when no remaining tasks exist.
++ * @returns Multi-line reminder with warning, mention, and task_read guidance
++ */
++export function reminderFinal(): string {
++  return [
++    "🚫 DO NOT POLL TASK_READ OR TASK_LIST FOR FUTURE TASKS.",
++    taskReadAfterNotification(),
++    "YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE> WHEN ALL TASKS FINISH.",
++  ].join(" ")
++}
++
++/**
++ * Reminder for task tool outputs.
++ * @returns "⚠️ Do NOT poll task_read or task_list. You WILL be notified when complete."
++ */
++export function taskOutputReminder(): string {
++  return "⚠️ Do NOT poll task_read or task_list. You WILL be notified when complete."
++}
++
++/**
++ * System prompt rules block for task.txt.
++ * Includes all anti-polling rules with consistent emoji usage.
++ * @returns Multi-line system prompt block
++ */
++export function systemRules(): string {
++  return `🚫 NEVER POLL TASK_READ OR TASK_LIST TO CHECK COMPLETION. YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE> WHEN ALL TASKS FINISH.
++❌ DO NOT POLL TASK_READ OR TASK_LIST - CONTINUE PRODUCTIVE WORK WHILE TASKS RUN IN THE BACKGROUND.`
++}
+diff --git a/packages/opencode/src/task/id.ts b/packages/opencode/src/task/id.ts
+new file mode 100644
+index 000000000..62bd726cc
+--- /dev/null
++++ b/packages/opencode/src/task/id.ts
+@@ -0,0 +1,1639 @@
++import { randomBytes } from "crypto"
++
++const ADJECTIVES = [
++  "able",
++  "above",
++  "absent",
++  "absolute",
++  "abstract",
++  "abundant",
++  "academic",
++  "acceptable",
++  "accepted",
++  "accessible",
++  "accurate",
++  "accused",
++  "active",
++  "actual",
++  "acute",
++  "added",
++  "additional",
++  "adequate",
++  "adjacent",
++  "administrative",
++  "adorable",
++  "advanced",
++  "adverse",
++  "advisory",
++  "aesthetic",
++  "afraid",
++  "aggregate",
++  "aggressive",
++  "agreeable",
++  "agreed",
++  "agricultural",
++  "alert",
++  "alive",
++  "alleged",
++  "allied",
++  "alone",
++  "alright",
++  "alternative",
++  "amateur",
++  "amazing",
++  "ambitious",
++  "amused",
++  "ancient",
++  "angry",
++  "annoyed",
++  "annual",
++  "anonymous",
++  "anxious",
++  "appalling",
++  "apparent",
++  "applicable",
++  "appropriate",
++  "arbitrary",
++  "architectural",
++  "armed",
++  "arrogant",
++  "artificial",
++  "artistic",
++  "ashamed",
++  "asleep",
++  "assistant",
++  "associated",
++  "atomic",
++  "attractive",
++  "automatic",
++  "autonomous",
++  "available",
++  "average",
++  "awake",
++  "aware",
++  "awful",
++  "awkward",
++  "back",
++  "bad",
++  "balanced",
++  "bare",
++  "basic",
++  "beautiful",
++  "beneficial",
++  "better",
++  "bewildered",
++  "big",
++  "binding",
++  "biological",
++  "bitter",
++  "bizarre",
++  "blank",
++  "blind",
++  "blonde",
++  "bloody",
++  "blushing",
++  "boiling",
++  "bold",
++  "bored",
++  "boring",
++  "bottom",
++  "brainy",
++  "brave",
++  "breakable",
++  "breezy",
++  "brief",
++  "bright",
++  "brilliant",
++  "broad",
++  "broken",
++  "bumpy",
++  "burning",
++  "busy",
++  "calm",
++  "capable",
++  "capitalist",
++  "careful",
++  "casual",
++  "causal",
++  "cautious",
++  "central",
++  "certain",
++  "changing",
++  "characteristic",
++  "charming",
++  "cheap",
++  "cheerful",
++  "chemical",
++  "chief",
++  "chilly",
++  "chosen",
++  "christian",
++  "chronic",
++  "chubby",
++  "circular",
++  "civic",
++  "civil",
++  "civilian",
++  "classic",
++  "classical",
++  "clean",
++  "clear",
++  "clever",
++  "clinical",
++  "close",
++  "closed",
++  "cloudy",
++  "clumsy",
++  "coastal",
++  "cognitive",
++  "coherent",
++  "cold",
++  "collective",
++  "colonial",
++  "colorful",
++  "colossal",
++  "coloured",
++  "colourful",
++  "combative",
++  "combined",
++  "comfortable",
++  "coming",
++  "commercial",
++  "common",
++  "communist",
++  "compact",
++  "comparable",
++  "comparative",
++  "compatible",
++  "competent",
++  "competitive",
++  "complete",
++  "complex",
++  "complicated",
++  "comprehensive",
++  "compulsory",
++  "conceptual",
++  "concerned",
++  "concrete",
++  "condemned",
++  "confident",
++  "confidential",
++  "confused",
++  "conscious",
++  "conservation",
++  "conservative",
++  "considerable",
++  "consistent",
++  "constant",
++  "constitutional",
++  "contemporary",
++  "content",
++  "continental",
++  "continued",
++  "continuing",
++  "continuous",
++  "controlled",
++  "controversial",
++  "convenient",
++  "conventional",
++  "convinced",
++  "convincing",
++  "cooing",
++  "cool",
++  "cooperative",
++  "corporate",
++  "correct",
++  "corresponding",
++  "costly",
++  "courageous",
++  "crazy",
++  "creative",
++  "creepy",
++  "criminal",
++  "critical",
++  "crooked",
++  "crowded",
++  "crucial",
++  "crude",
++  "cruel",
++  "cuddly",
++  "cultural",
++  "curious",
++  "curly",
++  "current",
++  "curved",
++  "cute",
++  "daily",
++  "damaged",
++  "damp",
++  "dangerous",
++  "dark",
++  "dead",
++  "deaf",
++  "deafening",
++  "dear",
++  "decent",
++  "decisive",
++  "deep",
++  "defeated",
++  "defensive",
++  "defiant",
++  "definite",
++  "deliberate",
++  "delicate",
++  "delicious",
++  "delighted",
++  "delightful",
++  "democratic",
++  "dependent",
++  "depressed",
++  "desirable",
++  "desperate",
++  "detailed",
++  "determined",
++  "developed",
++  "developing",
++  "devoted",
++  "different",
++  "difficult",
++  "digital",
++  "diplomatic",
++  "direct",
++  "dirty",
++  "disabled",
++  "disappointed",
++  "disastrous",
++  "disciplinary",
++  "disgusted",
++  "distant",
++  "distinct",
++  "distinctive",
++  "distinguished",
++  "disturbed",
++  "disturbing",
++  "diverse",
++  "divine",
++  "dizzy",
++  "domestic",
++  "dominant",
++  "double",
++  "doubtful",
++  "drab",
++  "dramatic",
++  "dreadful",
++  "driving",
++  "drunk",
++  "dry",
++  "dual",
++  "due",
++  "dull",
++  "dusty",
++  "dutch",
++  "dying",
++  "dynamic",
++  "eager",
++  "early",
++  "eastern",
++  "easy",
++  "economic",
++  "educational",
++  "eerie",
++  "effective",
++  "efficient",
++  "elaborate",
++  "elated",
++  "elderly",
++  "eldest",
++  "electoral",
++  "electric",
++  "electrical",
++  "electronic",
++  "elegant",
++  "eligible",
++  "embarrassed",
++  "embarrassing",
++  "emotional",
++  "empirical",
++  "empty",
++  "enchanting",
++  "encouraging",
++  "endless",
++  "energetic",
++  "enormous",
++  "enthusiastic",
++  "entire",
++  "entitled",
++  "envious",
++  "environmental",
++  "equal",
++  "equivalent",
++  "essential",
++  "established",
++  "estimated",
++  "ethical",
++  "ethnic",
++  "eventual",
++  "everyday",
++  "evident",
++  "evil",
++  "evolutionary",
++  "exact",
++  "excellent",
++  "exceptional",
++  "excess",
++  "excessive",
++  "excited",
++  "exciting",
++  "exclusive",
++  "existing",
++  "exotic",
++  "expected",
++  "expensive",
++  "experienced",
++  "experimental",
++  "explicit",
++  "extended",
++  "extensive",
++  "external",
++  "extra",
++  "extraordinary",
++  "extreme",
++  "exuberant",
++  "faint",
++  "fair",
++  "faithful",
++  "familiar",
++  "famous",
++  "fancy",
++  "fantastic",
++  "far",
++  "fascinating",
++  "fashionable",
++  "fast",
++  "fat",
++  "fatal",
++  "favourable",
++  "favourite",
++  "federal",
++  "fellow",
++  "female",
++  "feminist",
++  "few",
++  "fierce",
++  "filthy",
++  "final",
++  "financial",
++  "fine",
++  "firm",
++  "fiscal",
++  "fit",
++  "fixed",
++  "flaky",
++  "flat",
++  "flexible",
++  "fluffy",
++  "fluttering",
++  "flying",
++  "following",
++  "fond",
++  "foolish",
++  "foreign",
++  "formal",
++  "formidable",
++  "forthcoming",
++  "fortunate",
++  "forward",
++  "fragile",
++  "frail",
++  "frantic",
++  "free",
++  "frequent",
++  "fresh",
++  "friendly",
++  "frightened",
++  "front",
++  "frozen",
++  "full",
++  "fun",
++  "functional",
++  "fundamental",
++  "funny",
++  "furious",
++  "future",
++  "fuzzy",
++  "gastric",
++  "general",
++  "generous",
++  "genetic",
++  "gentle",
++  "genuine",
++  "geographical",
++  "giant",
++  "gigantic",
++  "given",
++  "glad",
++  "glamorous",
++  "gleaming",
++  "global",
++  "glorious",
++  "golden",
++  "good",
++  "gorgeous",
++  "gothic",
++  "governing",
++  "graceful",
++  "gradual",
++  "grand",
++  "grateful",
++  "greasy",
++  "great",
++  "grieving",
++  "grim",
++  "gross",
++  "grotesque",
++  "growing",
++  "grubby",
++  "grumpy",
++  "guilty",
++  "handicapped",
++  "handsome",
++  "happy",
++  "hard",
++  "harsh",
++  "head",
++  "healthy",
++  "heavy",
++  "helpful",
++  "helpless",
++  "hidden",
++  "high",
++  "hilarious",
++  "hissing",
++  "historic",
++  "historical",
++  "hollow",
++  "holy",
++  "homeless",
++  "homely",
++  "hon",
++  "honest",
++  "horizontal",
++  "horrible",
++  "hostile",
++  "hot",
++  "huge",
++  "human",
++  "hungry",
++  "hurt",
++  "hushed",
++  "husky",
++  "icy",
++  "ideal",
++  "identical",
++  "ideological",
++  "ill",
++  "illegal",
++  "imaginative",
++  "immediate",
++  "immense",
++  "imperial",
++  "implicit",
++  "important",
++  "impossible",
++  "impressed",
++  "impressive",
++  "improved",
++  "inadequate",
++  "inappropriate",
++  "inc",
++  "inclined",
++  "increased",
++  "increasing",
++  "incredible",
++  "independent",
++  "indirect",
++  "individual",
++  "industrial",
++  "inevitable",
++  "influential",
++  "informal",
++  "inherent",
++  "initial",
++  "injured",
++  "inland",
++  "inner",
++  "innocent",
++  "innovative",
++  "inquisitive",
++  "instant",
++  "institutional",
++  "insufficient",
++  "intact",
++  "integral",
++  "integrated",
++  "intellectual",
++  "intelligent",
++  "intense",
++  "intensive",
++  "interested",
++  "interesting",
++  "interim",
++  "interior",
++  "intermediate",
++  "internal",
++  "international",
++  "intimate",
++  "invisible",
++  "involved",
++  "irrelevant",
++  "isolated",
++  "itchy",
++  "jealous",
++  "jittery",
++  "joint",
++  "jolly",
++  "joyous",
++  "judicial",
++  "juicy",
++  "junior",
++  "just",
++  "keen",
++  "key",
++  "kind",
++  "known",
++  "labour",
++  "large",
++  "late",
++  "latin",
++  "lazy",
++  "leading",
++  "left",
++  "legal",
++  "legislative",
++  "legitimate",
++  "lengthy",
++  "lesser",
++  "level",
++  "lexical",
++  "liable",
++  "liberal",
++  "light",
++  "like",
++  "likely",
++  "limited",
++  "linear",
++  "linguistic",
++  "liquid",
++  "literary",
++  "little",
++  "live",
++  "lively",
++  "living",
++  "local",
++  "logical",
++  "lonely",
++  "long",
++  "loose",
++  "lost",
++  "loud",
++  "lovely",
++  "low",
++  "loyal",
++  "ltd",
++  "lucky",
++  "mad",
++  "magic",
++  "magnetic",
++  "magnificent",
++  "main",
++  "major",
++  "male",
++  "mammoth",
++  "managerial",
++  "managing",
++  "manual",
++  "many",
++  "marginal",
++  "marine",
++  "marked",
++  "married",
++  "marvellous",
++  "mass",
++  "massive",
++  "mathematical",
++  "mature",
++  "maximum",
++  "mean",
++  "meaningful",
++  "mechanical",
++  "medical",
++  "medieval",
++  "melodic",
++  "melted",
++  "mental",
++  "mere",
++  "metropolitan",
++  "mid",
++  "middle",
++  "mighty",
++  "mild",
++  "military",
++  "miniature",
++  "minimal",
++  "minimum",
++  "ministerial",
++  "minor",
++  "miserable",
++  "misleading",
++  "missing",
++  "misty",
++  "mixed",
++  "moaning",
++  "mobile",
++  "moderate",
++  "modern",
++  "modest",
++  "molecular",
++  "monetary",
++  "monthly",
++  "moral",
++  "motionless",
++  "muddy",
++  "multiple",
++  "mushy",
++  "musical",
++  "mute",
++  "mutual",
++  "mysterious",
++  "narrow",
++  "nasty",
++  "national",
++  "native",
++  "natural",
++  "naughty",
++  "naval",
++  "near",
++  "nearby",
++  "neat",
++  "necessary",
++  "negative",
++  "neighbouring",
++  "nervous",
++  "net",
++  "neutral",
++  "new",
++  "nice",
++  "noble",
++  "noisy",
++  "normal",
++  "northern",
++  "nosy",
++  "notable",
++  "novel",
++  "nuclear",
++  "numerous",
++  "nursing",
++  "nutritious",
++  "nutty",
++  "obedient",
++  "objective",
++  "obliged",
++  "obnoxious",
++  "obvious",
++  "occasional",
++  "occupational",
++  "odd",
++  "official",
++  "ok",
++  "okay",
++  "old",
++  "olympic",
++  "only",
++  "open",
++  "operational",
++  "opposite",
++  "optimistic",
++  "oral",
++  "ordinary",
++  "organic",
++  "organisational",
++  "original",
++  "orthodox",
++  "other",
++  "outdoor",
++  "outer",
++  "outrageous",
++  "outside",
++  "outstanding",
++  "overall",
++  "overseas",
++  "overwhelming",
++  "painful",
++  "pale",
++  "panicky",
++  "parallel",
++  "parental",
++  "parliamentary",
++  "partial",
++  "particular",
++  "passing",
++  "passive",
++  "past",
++  "patient",
++  "payable",
++  "peaceful",
++  "peculiar",
++  "perfect",
++  "permanent",
++  "persistent",
++  "personal",
++  "petite",
++  "philosophical",
++  "physical",
++  "plain",
++  "planned",
++  "plastic",
++  "pleasant",
++  "pleased",
++  "poised",
++  "polite",
++  "political",
++  "poor",
++  "popular",
++  "positive",
++  "possible",
++  "potential",
++  "powerful",
++  "practical",
++  "precious",
++  "precise",
++  "preferred",
++  "pregnant",
++  "preliminary",
++  "premier",
++  "prepared",
++  "present",
++  "presidential",
++  "pretty",
++  "previous",
++  "prickly",
++  "primary",
++  "prime",
++  "primitive",
++  "principal",
++  "printed",
++  "prior",
++  "private",
++  "probable",
++  "productive",
++  "professional",
++  "profitable",
++  "profound",
++  "progressive",
++  "prominent",
++  "promising",
++  "proper",
++  "proposed",
++  "prospective",
++  "protective",
++  "protestant",
++  "proud",
++  "provincial",
++  "psychiatric",
++  "psychological",
++  "public",
++  "puny",
++  "pure",
++  "purring",
++  "puzzled",
++  "quaint",
++  "qualified",
++  "quarrelsome",
++  "querulous",
++  "quick",
++  "quickest",
++  "quiet",
++  "quintessential",
++  "quixotic",
++  "racial",
++  "radical",
++  "rainy",
++  "random",
++  "rapid",
++  "rare",
++  "raspy",
++  "rational",
++  "ratty",
++  "raw",
++  "ready",
++  "real",
++  "realistic",
++  "rear",
++  "reasonable",
++  "recent",
++  "reduced",
++  "redundant",
++  "regional",
++  "registered",
++  "regular",
++  "regulatory",
++  "related",
++  "relative",
++  "relaxed",
++  "relevant",
++  "reliable",
++  "relieved",
++  "religious",
++  "reluctant",
++  "remaining",
++  "remarkable",
++  "remote",
++  "renewed",
++  "representative",
++  "repulsive",
++  "required",
++  "resident",
++  "residential",
++  "resonant",
++  "respectable",
++  "respective",
++  "responsible",
++  "resulting",
++  "retail",
++  "retired",
++  "revolutionary",
++  "rich",
++  "ridiculous",
++  "right",
++  "rigid",
++  "ripe",
++  "rising",
++  "rival",
++  "roasted",
++  "robust",
++  "rolling",
++  "romantic",
++  "rotten",
++  "rough",
++  "round",
++  "royal",
++  "rubber",
++  "rude",
++  "ruling",
++  "running",
++  "rural",
++  "sacred",
++  "sad",
++  "safe",
++  "salty",
++  "satisfactory",
++  "satisfied",
++  "scared",
++  "scary",
++  "scattered",
++  "scientific",
++  "scornful",
++  "scrawny",
++  "screeching",
++  "secondary",
++  "secret",
++  "secure",
++  "select",
++  "selected",
++  "selective",
++  "selfish",
++  "semantic",
++  "senior",
++  "sensible",
++  "sensitive",
++  "separate",
++  "serious",
++  "severe",
++  "shaggy",
++  "shaky",
++  "shallow",
++  "shared",
++  "sharp",
++  "sheer",
++  "shiny",
++  "shivering",
++  "shocked",
++  "short",
++  "shrill",
++  "shy",
++  "sick",
++  "significant",
++  "silent",
++  "silky",
++  "silly",
++  "similar",
++  "simple",
++  "single",
++  "skilled",
++  "skinny",
++  "sleepy",
++  "slight",
++  "slim",
++  "slimy",
++  "slippery",
++  "slow",
++  "small",
++  "smart",
++  "smiling",
++  "smoggy",
++  "smooth",
++  "social",
++  "socialist",
++  "soft",
++  "solar",
++  "sole",
++  "solid",
++  "sophisticated",
++  "sore",
++  "sorry",
++  "sound",
++  "sour",
++  "southern",
++  "soviet",
++  "spare",
++  "sparkling",
++  "spatial",
++  "special",
++  "specific",
++  "specified",
++  "spectacular",
++  "spicy",
++  "spiritual",
++  "splendid",
++  "spontaneous",
++  "sporting",
++  "spotless",
++  "spotty",
++  "square",
++  "squealing",
++  "stable",
++  "stale",
++  "standard",
++  "static",
++  "statistical",
++  "statutory",
++  "steady",
++  "steep",
++  "sticky",
++  "stiff",
++  "still",
++  "stingy",
++  "stormy",
++  "straight",
++  "straightforward",
++  "strange",
++  "strategic",
++  "strict",
++  "striking",
++  "striped",
++  "strong",
++  "structural",
++  "stuck",
++  "stupid",
++  "subjective",
++  "subsequent",
++  "substantial",
++  "subtle",
++  "successful",
++  "successive",
++  "sudden",
++  "sufficient",
++  "suitable",
++  "sunny",
++  "super",
++  "superb",
++  "superior",
++  "supporting",
++  "supposed",
++  "supreme",
++  "sure",
++  "surprised",
++  "surprising",
++  "surrounding",
++  "surviving",
++  "suspicious",
++  "sweet",
++  "swift",
++  "symbolic",
++  "sympathetic",
++  "systematic",
++  "tall",
++  "tame",
++  "tart",
++  "tasteless",
++  "tasty",
++  "technical",
++  "technological",
++  "teenage",
++  "temporary",
++  "tender",
++  "tense",
++  "terrible",
++  "territorial",
++  "testy",
++  "then",
++  "theoretical",
++  "thick",
++  "thin",
++  "thirsty",
++  "thorough",
++  "thoughtful",
++  "thoughtless",
++  "thundering",
++  "tight",
++  "tiny",
++  "tired",
++  "top",
++  "tory",
++  "total",
++  "tough",
++  "toxic",
++  "traditional",
++  "tragic",
++  "tremendous",
++  "tricky",
++  "tropical",
++  "troubled",
++  "typical",
++  "ugliest",
++  "ugly",
++  "ultimate",
++  "unable",
++  "unacceptable",
++  "unaware",
++  "uncertain",
++  "unchanged",
++  "uncomfortable",
++  "unconscious",
++  "underground",
++  "underlying",
++  "unemployed",
++  "uneven",
++  "unexpected",
++  "unfair",
++  "unfortunate",
++  "unhappy",
++  "uniform",
++  "uninterested",
++  "unique",
++  "united",
++  "universal",
++  "unknown",
++  "unlikely",
++  "unnecessary",
++  "unpleasant",
++  "unsightly",
++  "unusual",
++  "unwilling",
++  "upper",
++  "upset",
++  "uptight",
++  "urban",
++  "urgent",
++  "used",
++  "useful",
++  "useless",
++  "usual",
++  "vague",
++  "valid",
++  "valuable",
++  "variable",
++  "varied",
++  "various",
++  "varying",
++  "vast",
++  "verbal",
++  "vertical",
++  "very",
++  "vicarious",
++  "vicious",
++  "victorious",
++  "violent",
++  "visible",
++  "visiting",
++  "visual",
++  "vital",
++  "vitreous",
++  "vivacious",
++  "vivid",
++  "vocal",
++  "vocational",
++  "voiceless",
++  "voluminous",
++  "voluntary",
++  "vulnerable",
++  "wandering",
++  "warm",
++  "wasteful",
++  "watery",
++  "weak",
++  "wealthy",
++  "weary",
++  "wee",
++  "weekly",
++  "weird",
++  "welcome",
++  "well",
++  "western",
++  "wet",
++  "whispering",
++  "whole",
++  "wicked",
++  "wide",
++  "widespread",
++  "wild",
++  "wilful",
++  "willing",
++  "willowy",
++  "wily",
++  "wise",
++  "wispy",
++  "wittering",
++  "witty",
++  "wonderful",
++  "wooden",
++  "working",
++  "worldwide",
++  "worried",
++  "worrying",
++  "worthwhile",
++  "worthy",
++  "written",
++  "wrong",
++  "xenacious",
++  "xenial",
++  "xenogeneic",
++  "xeric",
++  "xerothermic",
++  "yabbering",
++  "yammering",
++  "yappiest",
++  "yappy",
++  "yawning",
++  "yearling",
++  "yearning",
++  "yeasty",
++  "yelling",
++  "yelping",
++  "yielding",
++  "yodelling",
++  "young",
++  "youngest",
++  "youthful",
++  "ytterbic",
++  "yucky",
++  "yummy",
++  "zany",
++  "zealous",
++  "zeroth",
++  "zestful",
++  "zesty",
++  "zippy",
++  "zonal",
++  "zoophagous",
++  "zygomorphic",
++  "zygotic",
++] as const
++
++const COLORS = [
++  "amaranth",
++  "amber",
++  "amethyst",
++  "apricot",
++  "aqua",
++  "aquamarine",
++  "azure",
++  "beige",
++  "black",
++  "blue",
++  "blush",
++  "bronze",
++  "brown",
++  "chocolate",
++  "coffee",
++  "copper",
++  "coral",
++  "crimson",
++  "cyan",
++  "emerald",
++  "fuchsia",
++  "gold",
++  "gray",
++  "green",
++  "harlequin",
++  "indigo",
++  "ivory",
++  "jade",
++  "lavender",
++  "lime",
++  "magenta",
++  "maroon",
++  "moccasin",
++  "olive",
++  "orange",
++  "peach",
++  "pink",
++  "plum",
++  "purple",
++  "red",
++  "rose",
++  "salmon",
++  "sapphire",
++  "scarlet",
++  "silver",
++  "tan",
++  "teal",
++  "tomato",
++  "turquoise",
++  "violet",
++  "white",
++  "yellow",
++] as const
++
++const ANIMALS = [
++  "aardvark",
++  "aardwolf",
++  "albatross",
++  "alligator",
++  "alpaca",
++  "amphibian",
++  "anaconda",
++  "angelfish",
++  "anglerfish",
++  "ant",
++  "anteater",
++  "antelope",
++  "antlion",
++  "ape",
++  "aphid",
++  "armadillo",
++  "asp",
++  "baboon",
++  "badger",
++  "bandicoot",
++  "barnacle",
++  "barracuda",
++  "basilisk",
++  "bass",
++  "bat",
++  "bear",
++  "beaver",
++  "bedbug",
++  "bee",
++  "beetle",
++  "bird",
++  "bison",
++  "blackbird",
++  "boa",
++  "boar",
++  "bobcat",
++  "bobolink",
++  "bonobo",
++  "booby",
++  "bovid",
++  "bug",
++  "butterfly",
++  "buzzard",
++  "camel",
++  "canid",
++  "canidae",
++  "capybara",
++  "cardinal",
++  "caribou",
++  "carp",
++  "cat",
++  "caterpillar",
++  "catfish",
++  "catshark",
++  "cattle",
++  "centipede",
++  "cephalopod",
++  "chameleon",
++  "cheetah",
++  "chickadee",
++  "chicken",
++  "chimpanzee",
++  "chinchilla",
++  "chipmunk",
++  "cicada",
++  "clam",
++  "clownfish",
++  "cobra",
++  "cockroach",
++  "cod",
++  "condor",
++  "constrictor",
++  "coral",
++  "cougar",
++  "cow",
++  "coyote",
++  "crab",
++  "crane",
++  "crawdad",
++  "crayfish",
++  "cricket",
++  "crocodile",
++  "crow",
++  "cuckoo",
++  "damselfly",
++  "deer",
++  "dingo",
++  "dinosaur",
++  "dog",
++  "dolphin",
++  "donkey",
++  "dormouse",
++  "dove",
++  "dragon",
++  "dragonfly",
++  "duck",
++  "eagle",
++  "earthworm",
++  "earwig",
++  "echidna",
++  "eel",
++  "egret",
++  "elephant",
++  "elk",
++  "emu",
++  "ermine",
++  "falcon",
++  "felidae",
++  "ferret",
++  "finch",
++  "firefly",
++  "fish",
++  "flamingo",
++  "flea",
++  "fly",
++  "flyingfish",
++  "fowl",
++  "fox",
++  "frog",
++  "galliform",
++  "gamefowl",
++  "gayal",
++  "gazelle",
++  "gecko",
++  "gerbil",
++  "gibbon",
++  "giraffe",
++  "goat",
++  "goldfish",
++  "goose",
++  "gopher",
++  "gorilla",
++  "grasshopper",
++  "grouse",
++  "guan",
++  "guanaco",
++  "guineafowl",
++  "gull",
++  "guppy",
++  "haddock",
++  "halibut",
++  "hamster",
++  "hare",
++  "harrier",
++  "hawk",
++  "hedgehog",
++  "heron",
++  "herring",
++  "hippopotamus",
++  "hookworm",
++  "hornet",
++  "horse",
++  "hoverfly",
++  "hummingbird",
++  "hyena",
++  "iguana",
++  "impala",
++  "jackal",
++  "jaguar",
++  "jay",
++  "jellyfish",
++  "junglefowl",
++  "kangaroo",
++  "kingfisher",
++  "kite",
++  "kiwi",
++  "koala",
++  "koi",
++  "krill",
++  "ladybug",
++  "lamprey",
++  "landfowl",
++  "lark",
++  "leech",
++  "lemming",
++  "lemur",
++  "leopard",
++  "leopon",
++  "limpet",
++  "lion",
++  "lizard",
++  "llama",
++  "lobster",
++  "locust",
++  "loon",
++  "louse",
++  "lungfish",
++  "lynx",
++  "macaw",
++  "mackerel",
++  "magpie",
++  "mammal",
++  "manatee",
++  "mandrill",
++  "marlin",
++  "marmoset",
++  "marmot",
++  "marsupial",
++  "marten",
++  "mastodon",
++  "meadowlark",
++  "meerkat",
++  "mink",
++  "minnow",
++  "mite",
++  "mockingbird",
++  "mole",
++  "mollusk",
++  "mongoose",
++  "monkey",
++  "moose",
++  "mosquito",
++  "moth",
++  "mouse",
++  "mule",
++  "muskox",
++  "narwhal",
++  "newt",
++  "nightingale",
++  "ocelot",
++  "octopus",
++  "opossum",
++  "orangutan",
++  "orca",
++  "ostrich",
++  "otter",
++  "owl",
++  "ox",
++  "panda",
++  "panther",
++  "parakeet",
++  "parrot",
++  "parrotfish",
++  "partridge",
++  "peacock",
++  "peafowl",
++  "pelican",
++  "penguin",
++  "perch",
++  "pheasant",
++  "pig",
++  "pigeon",
++  "pike",
++  "pinniped",
++  "piranha",
++  "planarian",
++  "platypus",
++  "pony",
++  "porcupine",
++  "porpoise",
++  "possum",
++  "prawn",
++  "primate",
++  "ptarmigan",
++  "puffin",
++  "puma",
++  "python",
++  "quail",
++  "quelea",
++  "quokka",
++  "rabbit",
++  "raccoon",
++  "rat",
++  "rattlesnake",
++  "raven",
++  "reindeer",
++  "reptile",
++  "rhinoceros",
++  "roadrunner",
++  "rodent",
++  "rook",
++  "rooster",
++  "roundworm",
++  "sailfish",
++  "salamander",
++  "salmon",
++  "sawfish",
++  "scallop",
++  "scorpion",
++  "seahorse",
++  "shark",
++  "sheep",
++  "shrew",
++  "shrimp",
++  "silkworm",
++  "silverfish",
++  "skink",
++  "skunk",
++  "sloth",
++  "slug",
++  "smelt",
++  "snail",
++  "snake",
++  "snipe",
++  "sole",
++  "sparrow",
++  "spider",
++  "spoonbill",
++  "squid",
++  "squirrel",
++  "starfish",
++  "stingray",
++  "stoat",
++  "stork",
++  "sturgeon",
++  "swallow",
++  "swan",
++  "swift",
++  "swordfish",
++  "swordtail",
++  "tahr",
++  "takin",
++  "tapir",
++  "tarantula",
++  "tarsier",
++  "termite",
++  "tern",
++  "thrush",
++  "tick",
++  "tiger",
++  "tiglon",
++  "toad",
++  "tortoise",
++  "toucan",
++  "trout",
++  "tuna",
++  "turkey",
++  "turtle",
++  "tyrannosaurus",
++  "unicorn",
++  "urial",
++  "vicuna",
++  "viper",
++  "vole",
++  "vulture",
++  "wallaby",
++  "walrus",
++  "warbler",
++  "wasp",
++  "weasel",
++  "whale",
++  "whippet",
++  "whitefish",
++  "wildcat",
++  "wildebeest",
++  "wildfowl",
++  "wolf",
++  "wolverine",
++  "wombat",
++  "woodpecker",
++  "worm",
++  "wren",
++  "xerinae",
++  "yak",
++  "zebra",
++] as const
++
++/**
++ * Generate a human-readable task ID.
++ *
++ * Format: adjective-color-animal (e.g., "swift-amber-falcon")
++ *
++ * IDs are unique enough for a session based on timestamp + random bytes.
++ * Collisions across sessions are acceptable.
++ */
++export function generateTaskId(): string {
++  // Combine timestamp and random bytes for deterministic selection
++  const timestamp = Date.now()
++  const random = randomBytes(3)
++
++  // Use timestamp + random for array indexing
++  const seed1 = (timestamp + random[0]) % ADJECTIVES.length
++  const seed2 = (timestamp + random[1]) % COLORS.length
++  const seed3 = (timestamp + random[2]) % ANIMALS.length
++
++  const adjective = ADJECTIVES[seed1]
++  const color = COLORS[seed2]
++  const animal = ANIMALS[seed3]
++
++  return `${adjective}-${color}-${animal}`
++}
+diff --git a/packages/opencode/src/task/index.ts b/packages/opencode/src/task/index.ts
+new file mode 100644
+index 000000000..4d63cd4b2
+--- /dev/null
++++ b/packages/opencode/src/task/index.ts
+@@ -0,0 +1,8 @@
++export * from "./types.js"
++export * from "./id.js"
++export * from "./store.js"
++export * from "./runner.js"
++export * from "./manager.js"
++export * from "./notification.js"
++export * from "./orphan.js"
++export * from "./anti-polling.js"
+diff --git a/packages/opencode/src/task/manager.ts b/packages/opencode/src/task/manager.ts
+new file mode 100644
+index 000000000..0b702b088
+--- /dev/null
++++ b/packages/opencode/src/task/manager.ts
+@@ -0,0 +1,278 @@
++import { Task } from "./types"
++import { Store } from "./store"
++import { generateTaskId } from "./id"
++import { TaskRunner } from "./runner"
++import { Session } from "../session"
++import { Storage } from "../storage/storage"
++import { Config } from "../config/config"
++import { Log } from "../util/log"
++
++const log = Log.create({ service: "task.manager" })
++
++// Track active tasks globally for concurrency cap
++const activeTasks = new Map<string, Set<string>>() // sessionID -> Set<taskID>
++
++// Track batch completion status: batchId -> { parentSessionID, total, completed, failed, notified, results }
++const activeBatches = new Map<
++  string,
++  {
++    parentSessionID: string
++    total: number
++    completed: number
++    failed: number
++    notified: boolean
++    results: Map<string, { status: "completed" | "failed"; result?: string; error?: string; description: string }>
++  }
++>()
++
++/**
++ * High-level task management API.
++ * Handles task lifecycle: creation, status tracking, and listing.
++ */
++export namespace TaskManager {
++  /**
++   * Input for starting a new task.
++   */
++  export interface StartInput {
++    sessionID: string // Parent session ID
++    parentMessageID: string // Message containing the task tool call
++    parentPartID: string // The ToolPart ID (callID) for streaming updates
++    parentCallID: string // The callID to find parent ToolPart
++    description: string // Task description
++    agent: string // Agent type
++    prompt: string // The prompt for the child session
++    batchId?: string // Optional batch ID for grouping tasks
++  }
++
++  /**
++   * Start a new task.
++   *
++   * Creates a task record in queued state, spawns a fire-and-forget runner,
++   * and returns the task ID immediately.
++   *
++   * The task will be executed asynchronously by the runner.
++   */
++  export async function start(input: StartInput): Promise<string> {
++    // A) Guard: Validate parent session exists
++    try {
++      await Session.get(input.sessionID)
++    } catch (error) {
++      if (error instanceof Storage.NotFoundError) {
++        throw new Error(`Parent session ${input.sessionID} not found. Cannot create task.`)
++      }
++      throw error
++    }
++
++    // B) Get config for concurrency cap
++    const config = await Config.get()
++    const maxConcurrent = config.task?.maxConcurrent ?? 5
++
++    // C) Initialize active set BEFORE any further async work
++    if (!activeTasks.has(input.sessionID)) {
++      activeTasks.set(input.sessionID, new Set())
++    }
++    const activeSet = activeTasks.get(input.sessionID)!
++
++    // Check concurrency cap
++    if (activeSet.size >= maxConcurrent) {
++      throw new Error(
++        `Concurrency limit reached: ${activeSet.size}/${maxConcurrent} tasks running. Wait for some to complete.`,
++      )
++    }
++
++    // D) Generate readable task ID with collision retry
++    let id: string
++    let retries = 0
++    const maxRetries = 5
++
++    while (retries < maxRetries) {
++      id = generateTaskId()
++      const existing = await Store.get(input.sessionID, id)
++      if (!existing) break // ID is available
++
++      retries++
++      log.warn("Task ID collision, retrying", { id, attempt: retries })
++    }
++
++    if (retries >= maxRetries) {
++      throw new Error(`Failed to generate unique task ID after ${maxRetries} attempts. Please try again.`)
++    }
++
++    // E) Create task record in queued state
++    const task: Task.TaskQueued = {
++      id: id!,
++      status: "queued",
++      sessionID: input.sessionID,
++      parentSessionID: input.sessionID,
++      parentMessageID: input.parentMessageID,
++      parentPartID: input.parentPartID,
++      parentCallID: input.parentCallID,
++      description: input.description,
++      agent: input.agent,
++      prompt: input.prompt,
++      createdAt: Date.now(),
++      batchId: input.batchId,
++    }
++
++    // F) Store the task
++    await Store.create(task)
++
++    // G) Register with batch if batchId provided
++    if (input.batchId) {
++      registerBatch(input.batchId, input.sessionID, id!, input.description)
++    }
++
++    // H) Track active task for concurrency (add to existing set)
++    activeSet.add(id!)
++
++    // Re-check concurrency after insertion to catch races
++    if (activeSet.size > maxConcurrent) {
++      // Clean up - always remove from active set, attempt storage cleanup
++      try {
++        await Store.remove(input.sessionID, id!)
++      } catch (err) {
++        log.warn("Failed to remove orphaned task from storage", { id: id!, error: err })
++      } finally {
++        activeSet.delete(id!)
++        if (activeSet.size === 0) {
++          activeTasks.delete(input.sessionID)
++        }
++      }
++      throw new Error(`Concurrency limit reached after insertion: ${activeSet.size}/${maxConcurrent} tasks running.`)
++    }
++
++    // I) Spawn fire-and-forget runner (no await)
++    TaskRunner.run(task)
++      .catch((error) => {
++        log.error("Runner failed", { taskId: id, error })
++      })
++      .finally(() => {
++        // Remove from active tracking
++        const set = activeTasks.get(input.sessionID)
++        if (set) {
++          set.delete(id!)
++          if (set.size === 0) {
++            activeTasks.delete(input.sessionID)
++          }
++        }
++      })
++
++    // J) Return the task ID immediately
++    return id!
++  }
++
++  /**
++   * Get task status by ID.
++   * Returns undefined if task not found.
++   */
++  export async function get(sessionID: string, id: string): Promise<Task.Info | undefined> {
++    return Store.get(sessionID, id)
++  }
++
++  /**
++   * List all tasks for a session.
++   * Returns empty array if session has no tasks.
++   */
++  export async function list(sessionID: string): Promise<Task.Info[]> {
++    return Store.list(sessionID)
++  }
++
++  /**
++   * Register a task with a batch.
++   * Creates the batch if it doesn't exist, increments total count.
++   */
++  export function registerBatch(batchId: string, parentSessionID: string, taskId: string, description: string) {
++    let batch = activeBatches.get(batchId)
++    if (!batch) {
++      batch = {
++        parentSessionID,
++        total: 0,
++        completed: 0,
++        failed: 0,
++        notified: false,
++        results: new Map(),
++      }
++      activeBatches.set(batchId, batch)
++    }
++    batch.total++
++    batch.results.set(taskId, { status: "completed", description }) // Placeholder until completion
++  }
++
++  /**
++   * Mark a task in a batch as completed.
++   */
++  export function markTaskComplete(batchId: string, taskId: string, result: string) {
++    const batch = activeBatches.get(batchId)
++    if (!batch) return
++    batch.completed++
++    const existing = batch.results.get(taskId)
++    if (existing) {
++      existing.status = "completed"
++      existing.result = result
++    }
++  }
++
++  /**
++   * Mark a task in a batch as failed.
++   */
++  export function markTaskFailed(batchId: string, taskId: string, error: string) {
++    const batch = activeBatches.get(batchId)
++    if (!batch) return
++    batch.failed++
++    const existing = batch.results.get(taskId)
++    if (existing) {
++      existing.status = "failed"
++      existing.error = error
++    }
++  }
++
++  /**
++   * Check if a batch is complete (all tasks finished).
++   */
++  export function isBatchComplete(batchId: string): boolean {
++    const batch = activeBatches.get(batchId)
++    if (!batch) return false
++    return batch.completed + batch.failed >= batch.total
++  }
++
++  /**
++   * Get batch results for notification.
++   */
++  export function getBatchResults(batchId: string) {
++    const batch = activeBatches.get(batchId)
++    if (!batch) return null
++    return {
++      batchId,
++      parentSessionID: batch.parentSessionID,
++      results: Array.from(batch.results.entries()).map(([id, data]) => ({
++        id,
++        ...data,
++      })),
++    }
++  }
++
++  /**
++   * Mark a batch as notified (prevents duplicate notifications).
++   */
++  export function markBatchNotified(batchId: string) {
++    const batch = activeBatches.get(batchId)
++    if (batch) {
++      batch.notified = true
++    }
++  }
++
++  /**
++   * Check if a batch has been notified.
++   */
++  export function isBatchNotified(batchId: string): boolean {
++    const batch = activeBatches.get(batchId)
++    return batch?.notified ?? false
++  }
++
++  /**
++   * Clean up a batch from tracking.
++   */
++  export function cleanupBatch(batchId: string) {
++    activeBatches.delete(batchId)
++  }
++}
+diff --git a/packages/opencode/src/task/notification.ts b/packages/opencode/src/task/notification.ts
+new file mode 100644
+index 000000000..c1c29c200
+--- /dev/null
++++ b/packages/opencode/src/task/notification.ts
+@@ -0,0 +1,121 @@
++import { SessionPrompt } from "../session/prompt.js"
++import { Task } from "./types.js"
++import { escape, cdata } from "../util/xml"
++import { Log } from "../util/log"
++import { TaskManager } from "./manager.js"
++import { reminderRemaining, reminderFinal } from "./anti-polling.js"
++
++const log = Log.create({ service: "task.notification" })
++
++export async function notifyCompletion(task: Task.TaskCompleted | Task.TaskFailed): Promise<void> {
++  const status = task.status
++  const id = task.id
++  const description = escape(task.description)
++
++  // Check if there are remaining tasks in the session
++  let antiPollingNote = ""
++  try {
++    const allTasks = await TaskManager.list(task.parentSessionID)
++    const remainingCount = allTasks.filter((d) => d.status === "queued" || d.status === "running").length
++
++    if (remainingCount > 0) {
++      antiPollingNote = `\n\n${reminderRemaining(remainingCount)}`
++    } else {
++      antiPollingNote = `\n\n${reminderFinal()}`
++    }
++  } catch (error) {
++    // Fallback if we can't get task list
++    antiPollingNote = `\n\n${reminderFinal()}`
++  }
++
++  let message: string
++  if (task.status === "completed") {
++    message = `<task-notification>
++<task-id>${escape(id)}</task-id>
++<status>complete</status>
++<summary>Task "${description}" completed successfully</summary>
++<result>${cdata(task.result)}</result>
++</task-notification>${antiPollingNote}`
++  } else {
++    message = `<task-notification>
++<task-id>${escape(id)}</task-id>
++<status>failed</status>
++<summary>Task "${description}" failed</summary>
++<error>${escape(task.error)}</error>
++</task-notification>${antiPollingNote}`
++  }
++
++  // Inject the notification into the parent session WITHOUT triggering a model response
++  try {
++    await SessionPrompt.prompt({
++      sessionID: task.parentSessionID,
++      noReply: true, // Critical: don't trigger model response
++      parts: [{ type: "text", text: message }],
++    })
++  } catch (error) {
++    // Catch and log notification failures; do not fail task because notification failed
++    log.error("Failed to send notification", {
++      taskId: task.id,
++      error: error instanceof Error ? error.message : String(error),
++    })
++  }
++}
++
++const MAX_RESULT_LENGTH = 10 * 1024 // 10KB
++
++function truncateResult(text: string): string {
++  if (text.length <= MAX_RESULT_LENGTH) return text
++  return text.slice(0, MAX_RESULT_LENGTH) + "\n\n[truncated - use task_read(id) for full content]"
++}
++
++export interface BatchResult {
++  id: string
++  status: "completed" | "failed"
++  description: string
++  result?: string
++  error?: string
++}
++
++export interface BatchCompletionInput {
++  batchId: string
++  parentSessionID: string
++  results: BatchResult[]
++}
++
++export async function notifyBatchCompletion(input: BatchCompletionInput): Promise<void> {
++  const { batchId, parentSessionID, results } = input
++
++  // Build XML for each task
++  const tasksXml = results
++    .map((task) => {
++      if (task.status === "completed") {
++        return `  <task id="${escape(task.id)}" status="completed">
++    <description>${escape(task.description)}</description>
++    <result>${cdata(truncateResult(task.result ?? ""))}</result>
++  </task>`
++      } else {
++        return `  <task id="${escape(task.id)}" status="failed">
++    <description>${escape(task.description)}</description>
++    <error>${cdata(task.error ?? "Unknown error")}</error>
++  </task>`
++      }
++    })
++    .join("\n")
++
++  const message = `<batch-complete batch-id="${escape(batchId)}">
++${tasksXml}
++</batch-complete>`
++
++  // Inject with synthetic: true (hidden from user) and noReply: false (wake agent)
++  await SessionPrompt.prompt({
++    sessionID: parentSessionID,
++    noReply: false, // Wake the agent!
++    parts: [
++      {
++        type: "text",
++        text: message,
++        synthetic: true, // Hidden from user, visible to agent
++      },
++    ],
++  })
++}
+diff --git a/packages/opencode/src/task/orphan.ts b/packages/opencode/src/task/orphan.ts
+new file mode 100644
+index 000000000..16b2e541f
+--- /dev/null
++++ b/packages/opencode/src/task/orphan.ts
+@@ -0,0 +1,87 @@
++import { Task } from "./types.js"
++import { Store } from "./store.js"
++import { notifyCompletion, notifyBatchCompletion } from "./notification.js"
++import { TaskManager } from "./manager.js"
++import { Log } from "../util/log"
++
++const log = Log.create({ service: "task.orphan" })
++
++/**
++ * Initialize orphan cleanup on server startup.
++ * Finds all tasks that were queued or running when the server crashed/restarted
++ * and marks them as failed with a descriptive error.
++ */
++export async function initOrphanCleanup(): Promise<void> {
++  log.info("Starting orphan cleanup")
++
++  const all = await Store.listAll()
++
++  for (const task of all) {
++    // Mark BOTH queued and running tasks as failed
++    if (task.status !== "queued" && task.status !== "running") {
++      continue
++    }
++
++    log.info("Cleaning orphaned task", {
++      taskId: task.id,
++      status: task.status,
++      description: task.description,
++    })
++
++    // This task was interrupted by server restart
++    const failed: Task.TaskFailed = {
++      ...task,
++      status: "failed",
++      startedAt: task.status === "running" ? task.startedAt : Date.now(),
++      failedAt: Date.now(),
++      error: "Task interrupted by server restart",
++    }
++
++    await Store.update(failed)
++
++    // Attempt to notify parent session, but parent may also be gone
++    // Notification errors are expected and should not halt cleanup
++    try {
++      await notifyCompletion(failed)
++    } catch (error) {
++      // Ignore notification errors during cleanup - parent session may be orphaned too
++      log.warn("Failed to notify orphaned task", {
++        taskId: task.id,
++        error: error instanceof Error ? error.message : String(error),
++      })
++    }
++
++    // Handle batch completion for orphaned tasks
++    if (task.batchId) {
++      // Re-register orphan with batch (batch state lost on restart)
++      TaskManager.registerBatch(task.batchId, task.parentSessionID, task.id, task.description)
++
++      // Mark task as failed in batch
++      TaskManager.markTaskFailed(task.batchId, task.id, "Task interrupted by server restart")
++
++      // Check if batch is now complete
++      if (TaskManager.isBatchComplete(task.batchId) && !TaskManager.isBatchNotified(task.batchId)) {
++        TaskManager.markBatchNotified(task.batchId)
++
++        const batchResults = TaskManager.getBatchResults(task.batchId)
++        if (batchResults) {
++          try {
++            await notifyBatchCompletion({
++              batchId: batchResults.batchId,
++              parentSessionID: batchResults.parentSessionID,
++              results: batchResults.results,
++            })
++          } catch (error) {
++            log.warn("Failed to send batch completion notification for orphaned tasks", {
++              batchId: task.batchId,
++              error,
++            })
++          }
++          TaskManager.cleanupBatch(task.batchId)
++        }
++      }
++    }
++  }
++
++  log.info("Orphan cleanup complete")
++}
+diff --git a/packages/opencode/src/task/runner.ts b/packages/opencode/src/task/runner.ts
+new file mode 100644
+index 000000000..cde7087fc
+--- /dev/null
++++ b/packages/opencode/src/task/runner.ts
+@@ -0,0 +1,380 @@
++import { Log } from "../util/log"
++import { Session } from "../session"
++import { SessionPrompt } from "../session/prompt"
++import { Agent } from "../agent/agent"
++import { Bus } from "../bus"
++import { MessageV2 } from "../session/message-v2"
++import { Identifier } from "../id/id"
++import { Config } from "../config/config"
++import { Task } from "./types"
++import { Store } from "./store"
++import { notifyBatchCompletion } from "./notification"
++import { TaskManager } from "./manager"
++
++/**
++ * Handle batch-aware completion notification.
++ * Marks the task as complete/failed in its batch, then checks if the entire batch
++ * is complete. If so, sends consolidated batch notification.
++ */
++async function handleBatchCompletion(
++  batchId: string | undefined,
++  taskId: string,
++  status: "completed" | "failed",
++  resultOrError: string,
++  description: string,
++): Promise<void> {
++  // If no batchId, fall back to individual notification for backwards compatibility
++  if (!batchId) {
++    return
++  }
++
++  // Mark task in batch
++  if (status === "completed") {
++    TaskManager.markTaskComplete(batchId, taskId, resultOrError)
++  } else {
++    TaskManager.markTaskFailed(batchId, taskId, resultOrError)
++  }
++
++  // Check if batch is complete and not already notified
++  if (TaskManager.isBatchComplete(batchId) && !TaskManager.isBatchNotified(batchId)) {
++    const batchResults = TaskManager.getBatchResults(batchId)
++    if (batchResults) {
++      try {
++        await notifyBatchCompletion({
++          batchId: batchResults.batchId,
++          parentSessionID: batchResults.parentSessionID,
++          results: batchResults.results,
++        })
++        // Only mark notified on SUCCESS
++        TaskManager.markBatchNotified(batchId)
++      } finally {
++        // Always cleanup, even if notification fails
++        TaskManager.cleanupBatch(batchId)
++      }
++    }
++  }
++}
++
++export namespace TaskRunner {
++  const log = Log.create({ service: "task.runner" })
++
++  /**
++   * Run a single task from queued to completed/failed state.
++   * This is a fire-and-forget function - it handles its own lifecycle.
++   *
++   * Architecture: Per-task runner (no global loop).
++   */
++  export async function run(task: Task.TaskQueued): Promise<void> {
++    log.info("Running task", { taskId: task.id, agent: task.agent })
++
++    const startedAt = Date.now()
++    let childSessionID: string | undefined = undefined
++
++    try {
++      // 1. Get configuration for timeout
++      const config = await Config.get()
++      const timeoutMs = config.task?.timeoutMs ?? 15 * 60 * 1000
++
++      // 2. Get or create child session
++      const agent = await Agent.get(task.agent)
++      if (!agent) {
++        throw new Error(`Unknown agent type: ${task.agent}`)
++      }
++
++      const childSession = await Session.create({
++        parentID: task.parentSessionID,
++        title: task.description + ` (@${agent.name} task)`,
++      })
++      childSessionID = childSession.id
++
++      // 3. Transition to running state
++      const runningTask: Task.TaskRunning = {
++        ...task,
++        status: "running",
++        childSessionID: childSession.id,
++        startedAt,
++      }
++      await Store.update(runningTask)
++
++      // 4. Find parent ToolPart by parentCallID (not parentPartID!)
++      let parentMessage: MessageV2.WithParts | undefined
++      let parentPart: MessageV2.ToolPart | undefined
++
++      try {
++        parentMessage = await MessageV2.get({
++          sessionID: task.parentSessionID,
++          messageID: task.parentMessageID,
++        })
++
++        parentPart = parentMessage.parts.find(
++          (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === task.parentCallID,
++        )
++      } catch (error) {
++        log.warn("Could not find parent message/part for streaming updates", {
++          taskId: task.id,
++          error: error instanceof Error ? error.message : String(error),
++        })
++      }
++
++      // 5. Track child tool parts for streaming updates
++      const parts: Record<string, { id: string; tool: string; state: { status: string; title?: string } }> = {}
++
++      // 6. Subscribe to Bus events BEFORE starting prompt
++      const unsub = Bus.subscribe(MessageV2.Event.PartUpdated, async (evt) => {
++        if (evt.properties.part.sessionID !== childSession.id) return
++        if (evt.properties.part.type !== "tool") return
++
++        const part = evt.properties.part
++        parts[part.id] = {
++          id: part.id,
++          tool: part.tool,
++          state: {
++            status: part.state.status,
++            title: part.state.status === "completed" ? part.state.title : undefined,
++          },
++        }
++
++        // Update parent ToolPart with streaming progress (only update metadata)
++        if (parentPart) {
++          try {
++            // Only update if part is in a state that has these properties
++            if (
++              parentPart.state.status === "completed" ||
++              parentPart.state.status === "running" ||
++              parentPart.state.status === "error"
++            ) {
++              const existingTime = parentPart.state.time
++              const hasEnd = "end" in existingTime
++
++              await Session.updatePart({
++                id: parentPart.id,
++                messageID: task.parentMessageID,
++                sessionID: task.parentSessionID,
++                type: "tool",
++                tool: parentPart.tool,
++                callID: parentPart.callID,
++                state: {
++                  status: "completed", // Keep status as completed (per requirement)
++                  input: parentPart.state.input,
++                  output: parentPart.state.status === "completed" ? parentPart.state.output : "",
++                  title:
++                    parentPart.state.status === "completed" || parentPart.state.status === "running"
++                      ? parentPart.state.title || task.description
++                      : task.description,
++                  metadata: {
++                    ...(parentPart.state.metadata || {}),
++                    summary: Object.values(parts).sort((a, b) => a.id.localeCompare(b.id)),
++                    sessionId: childSession.id,
++                  },
++                  time: hasEnd
++                    ? (existingTime as { start: number; end: number })
++                    : { start: existingTime.start, end: Date.now() },
++                },
++              })
++            }
++          } catch (error) {
++            // Wrap in try/catch to avoid unhandled rejections if parent part disappears
++            log.warn("Failed to update parent part during streaming", {
++              taskId: task.id,
++              error: error instanceof Error ? error.message : String(error),
++            })
++          }
++        }
++      })
++
++      // 7. Get the parent message to inherit model settings
++      const parentMsg = await MessageV2.get({
++        sessionID: task.parentSessionID,
++        messageID: task.parentMessageID,
++      })
++
++      const model = agent.model ?? {
++        modelID: parentMsg.info.role === "assistant" ? parentMsg.info.modelID : "gpt-4",
++        providerID: parentMsg.info.role === "assistant" ? parentMsg.info.providerID : "openai",
++      }
++
++      // 8. Resolve prompt parts
++      const promptParts = await SessionPrompt.resolvePromptParts(task.prompt)
++
++      // 10. Create a promise that rejects on timeout
++      const messageID = Identifier.ascending("message")
++      const executionPromise = SessionPrompt.prompt({
++        messageID,
++        sessionID: childSession.id,
++        model: {
++          modelID: model.modelID,
++          providerID: model.providerID,
++        },
++        agent: agent.name,
++        tools: {
++          todowrite: false,
++          todoread: false,
++          task: false,
++          ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
++          ...agent.tools,
++        },
++        parts: promptParts,
++      })
++
++      let timeoutHandle: Timer | undefined
++      const timeoutPromise = new Promise<never>((_, reject) => {
++        timeoutHandle = setTimeout(() => {
++          SessionPrompt.cancel(childSession.id)
++          reject(new Error(`Task timed out after ${timeoutMs}ms`))
++        }, timeoutMs)
++      })
++
++      try {
++        // 11. Race execution against timeout
++        const result = await Promise.race([executionPromise, timeoutPromise])
++
++        // 12. Unsubscribe from Bus events
++        unsub()
++
++        // 13. Build final summary from session messages
++        const messages = await Session.messages({ sessionID: childSession.id })
++        const summary = messages
++          .filter((x) => x.info.role === "assistant")
++          .flatMap((msg) => {
++            return msg.parts.filter((x): x is MessageV2.ToolPart => x.type === "tool")
++          })
++          .map((part) => ({
++            id: part.id,
++            tool: part.tool,
++            state: {
++              status: part.state.status,
++              title: part.state.status === "completed" ? part.state.title : undefined,
++            },
++          }))
++
++        const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
++
++        const output =
++          text + "\n\n" + ["<task_metadata>", `session_id: ${childSession.id}`, "</task_metadata>"].join("\n")
++
++        // 14. Update task to completed state
++        const completedTask: Task.TaskCompleted = {
++          ...runningTask,
++          status: "completed",
++          completedAt: Date.now(),
++          result: output,
++        }
++        await Store.update(completedTask)
++
++        // 15. Final update to parent ToolPart with complete summary
++        if (parentPart) {
++          try {
++            await Session.updatePart({
++              id: parentPart.id,
++              messageID: task.parentMessageID,
++              sessionID: task.parentSessionID,
++              type: "tool",
++              tool: parentPart.tool,
++              callID: parentPart.callID,
++              state: {
++                status: "completed",
++                input: parentPart.state.input,
++                output,
++                title: task.description,
++                metadata: {
++                  taskId: task.id,
++                  summary,
++                  sessionId: childSession.id,
++                },
++                time: { start: task.createdAt, end: Date.now() },
++              },
++            })
++          } catch (error) {
++            log.warn("Failed to update parent part on completion", {
++              taskId: task.id,
++              error: error instanceof Error ? error.message : String(error),
++            })
++          }
++        }
++
++        log.info("Task completed", { taskId: task.id, duration: Date.now() - startedAt })
++
++        // 16. Handle batch completion (replaces per-task notification)
++        try {
++          await handleBatchCompletion(task.batchId, task.id, "completed", output, task.description)
++        } catch (error) {
++          log.error("Failed to handle batch completion", {
++            taskId: task.id,
++            error: error instanceof Error ? error.message : String(error),
++          })
++        }
++      } catch (error) {
++        // Unsubscribe on error
++        unsub()
++        throw error
++      } finally {
++        // Clear timeout timer
++        if (timeoutHandle) {
++          clearTimeout(timeoutHandle)
++        }
++      }
++    } catch (error) {
++      // Handle failure
++      const errorMessage = error instanceof Error ? error.message : String(error)
++      log.error("Task failed", { taskId: task.id, error: errorMessage })
++
++      const failedTask: Task.TaskFailed = {
++        ...task,
++        status: "failed",
++        childSessionID: childSessionID,
++        startedAt,
++        failedAt: Date.now(),
++        error: errorMessage,
++      }
++      await Store.update(failedTask)
++
++      // Update parent ToolPart with error info
++      try {
++        const parentMsg = await MessageV2.get({
++          sessionID: task.parentSessionID,
++          messageID: task.parentMessageID,
++        })
++
++        const parentPart = parentMsg.parts.find(
++          (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === task.parentCallID,
++        )
++
++        if (parentPart) {
++          await Session.updatePart({
++            id: parentPart.id,
++            messageID: task.parentMessageID,
++            sessionID: task.parentSessionID,
++            type: "tool",
++            tool: parentPart.tool,
++            callID: parentPart.callID,
++            state: {
++              status: "error",
++              input: parentPart.state.input,
++              error: errorMessage,
++              metadata: {
++                taskId: task.id,
++                sessionId: childSessionID,
++              },
++              time: { start: task.createdAt, end: Date.now() },
++            },
++          })
++        }
++      } catch (updateError) {
++        log.warn("Failed to update parent part on error", {
++          taskId: task.id,
++          error: updateError instanceof Error ? updateError.message : String(updateError),
++        })
++      }
++
++      // Handle batch completion (failure is still a completion)
++      try {
++        await handleBatchCompletion(task.batchId, task.id, "failed", errorMessage, task.description)
++      } catch (error) {
++        log.error("Failed to handle batch completion", {
++          taskId: task.id,
++          error: error instanceof Error ? error.message : String(error),
++        })
++      }
++    }
++  }
++}
+diff --git a/packages/opencode/src/task/store.ts b/packages/opencode/src/task/store.ts
+new file mode 100644
+index 000000000..f80f83644
+--- /dev/null
++++ b/packages/opencode/src/task/store.ts
+@@ -0,0 +1,89 @@
++import { Storage } from "../storage/storage"
++import { Task } from "./types"
++
++/**
++ * Store namespace for task persistence operations.
++ * Uses Storage API with key structure: ["task", sessionID, taskId]
++ */
++export namespace Store {
++  /**
++   * Create a new task in queued state.
++   */
++  export async function create(task: Task.TaskQueued): Promise<void> {
++    await Storage.write(["task", task.sessionID, task.id], task)
++  }
++
++  /**
++   * Get a task by ID.
++   * Returns undefined if not found.
++   */
++  export async function get(sessionID: string, id: string): Promise<Task.Info | undefined> {
++    try {
++      return await Storage.read<Task.Info>(["task", sessionID, id])
++    } catch (e) {
++      if (e instanceof Storage.NotFoundError) {
++        return undefined
++      }
++      throw e
++    }
++  }
++
++  /**
++   * List all tasks for a session.
++   * Returns empty array if session has no tasks.
++   */
++  export async function list(sessionID: string): Promise<Task.Info[]> {
++    const result: Task.Info[] = []
++    const items = await Storage.list(["task", sessionID])
++    for (const item of items) {
++      try {
++        const task = await Storage.read<Task.Info>(item)
++        result.push(task)
++      } catch (e) {
++        // Skip if read fails (e.g., file was deleted concurrently)
++        if (!(e instanceof Storage.NotFoundError)) {
++          throw e
++        }
++      }
++    }
++    return result
++  }
++
++  /**
++   * List ALL tasks across all sessions.
++   * Used for orphan cleanup and system maintenance.
++   */
++  export async function listAll(): Promise<Task.Info[]> {
++    const result: Task.Info[] = []
++    const sessions = await Storage.list(["task"])
++    for (const sessionPath of sessions) {
++      const items = await Storage.list(sessionPath)
++      for (const item of items) {
++        try {
++          const task = await Storage.read<Task.Info>(item)
++          result.push(task)
++        } catch (e) {
++          // Skip if read fails
++          if (!(e instanceof Storage.NotFoundError)) {
++            throw e
++          }
++        }
++      }
++    }
++    return result
++  }
++
++  /**
++   * Update a task (for state transitions).
++   */
++  export async function update(task: Task.Info): Promise<void> {
++    await Storage.write(["task", task.sessionID, task.id], task)
++  }
++
++  /**
++   * Remove a task from storage.
++   */
++  export async function remove(sessionID: string, id: string): Promise<void> {
++    await Storage.remove(["task", sessionID, id])
++  }
++}
+diff --git a/packages/opencode/src/task/types.ts b/packages/opencode/src/task/types.ts
+new file mode 100644
+index 000000000..08eaefac6
+--- /dev/null
++++ b/packages/opencode/src/task/types.ts
+@@ -0,0 +1,67 @@
++import z from "zod"
++
++export namespace Task {
++  // Base fields shared by all states
++  const TaskBase = z.object({
++    id: z.string(), // Readable ID like "swift-amber-falcon"
++    sessionID: z.string(), // Parent session ID
++    parentSessionID: z.string(), // Same as sessionID (for clarity)
++    parentMessageID: z.string(), // Message containing the task tool call
++    parentPartID: z.string(), // The ToolPart ID (callID) for streaming updates
++    parentCallID: z.string(), // The callID used to find the parent ToolPart
++    batchId: z.string().optional(), // Batch ID for grouping tasks from same agent turn
++    childSessionID: z.string().optional(), // Child session ID (set when running)
++    description: z.string(), // Task description
++    agent: z.string(), // Agent type (e.g., "explore", "coder")
++    prompt: z.string(), // The prompt for the child session
++    createdAt: z.number(), // Timestamp when created
++  })
++
++  // Queued state - waiting to be picked up by runner
++  export const TaskQueued = TaskBase.extend({
++    status: z.literal("queued"),
++  }).meta({
++    ref: "TaskQueued",
++  })
++  export type TaskQueued = z.infer<typeof TaskQueued>
++
++  // Running state - being executed by runner
++  export const TaskRunning = TaskBase.extend({
++    status: z.literal("running"),
++    childSessionID: z.string(), // Now required
++    startedAt: z.number(), // When execution started
++  }).meta({
++    ref: "TaskRunning",
++  })
++  export type TaskRunning = z.infer<typeof TaskRunning>
++
++  // Completed state - finished successfully
++  export const TaskCompleted = TaskBase.extend({
++    status: z.literal("completed"),
++    childSessionID: z.string(),
++    startedAt: z.number(),
++    completedAt: z.number(),
++    result: z.string(), // Final result/output
++  }).meta({
++    ref: "TaskCompleted",
++  })
++  export type TaskCompleted = z.infer<typeof TaskCompleted>
++
++  // Failed state - finished with error
++  export const TaskFailed = TaskBase.extend({
++    status: z.literal("failed"),
++    childSessionID: z.string().optional(),
++    startedAt: z.number().optional(),
++    failedAt: z.number(),
++    error: z.string(), // Error message
++  }).meta({
++    ref: "TaskFailed",
++  })
++  export type TaskFailed = z.infer<typeof TaskFailed>
++
++  // Discriminated union for all task states
++  export const Info = z.discriminatedUnion("status", [TaskQueued, TaskRunning, TaskCompleted, TaskFailed]).meta({
++    ref: "Task",
++  })
++  export type Info = z.infer<typeof Info>
++}
+diff --git a/packages/opencode/src/tool/registry.ts b/packages/opencode/src/tool/registry.ts
+index 41934c170..9721cf3a1 100644
+--- a/packages/opencode/src/tool/registry.ts
++++ b/packages/opencode/src/tool/registry.ts
+@@ -6,6 +6,8 @@ import { ListTool } from "./ls"
+ import { BatchTool } from "./batch"
+ import { ReadTool } from "./read"
+ import { TaskTool } from "./task"
++import { TaskReadTool } from "./task-read"
++import { TaskListTool } from "./task-list"
+ import { TodoWriteTool, TodoReadTool } from "./todo"
+ import { WebFetchTool } from "./webfetch"
+ import { WriteTool } from "./write"
+@@ -96,6 +98,8 @@ export namespace ToolRegistry {
+       EditTool,
+       WriteTool,
+       TaskTool,
++      TaskReadTool,
++      TaskListTool,
+       SkillTool,
+       WebFetchTool,
+       TodoWriteTool,
+diff --git a/packages/opencode/src/tool/task-list.ts b/packages/opencode/src/tool/task-list.ts
+new file mode 100644
+index 000000000..9e492af2a
+--- /dev/null
++++ b/packages/opencode/src/tool/task-list.ts
+@@ -0,0 +1,55 @@
++import { z } from "zod"
++import { Tool } from "./tool.js"
++import { TaskManager } from "../task/manager.js"
++import { taskOutputReminder, taskReadAfterNotification } from "../task/anti-polling.js"
++import { Permission } from "../permission"
++
++export const TaskListTool = Tool.define("task_list", {
++  description: `List all delegated background tasks in the current session. Shows task IDs, descriptions, and status. ${taskOutputReminder()} ${taskReadAfterNotification()}`,
++  parameters: z.object({
++    session_id: z.string().optional().describe("The session ID to list tasks for. Defaults to current session."),
++  }),
++  async execute(params, ctx) {
++    const sessionID = params.session_id ?? ctx.sessionID
++    const tasks = await TaskManager.list(sessionID)
++
++    if (tasks.length === 0) {
++      return {
++        title: "No tasks found",
++        metadata: {},
++        output: `No tasks found in this session.\n\n${taskOutputReminder()} ${taskReadAfterNotification()}`,
++      }
++    }
++
++    // Hard block: prevent polling while tasks are running
++    const hasRunning = tasks.some((d) => d.status === "queued" || d.status === "running")
++    if (hasRunning) {
++      throw new Permission.RejectedError(
++        ctx.sessionID,
++        "polling_forbidden",
++        ctx.callID,
++        {
++          running_count: tasks.filter((d) => d.status === "queued" || d.status === "running").length,
++        },
++        "🚫 POLLING IS FORBIDDEN. TASKS ARE STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
++      )
++    }
++
++    // Format the list
++    const lines = tasks.map((d) => {
++      const statusIcon = {
++        queued: "⏳",
++        running: "⏳",
++        completed: "✅",
++        failed: "❌",
++      }[d.status]
++      return `${statusIcon} ${d.id} - ${d.description} (${d.status})`
++    })
++
++    return {
++      title: `${tasks.length} task(s) found`,
++      metadata: {},
++      output: lines.join("\n") + `\n\n${taskOutputReminder()} ${taskReadAfterNotification()}`,
++    }
++  },
++})
+diff --git a/packages/opencode/src/tool/task-read.ts b/packages/opencode/src/tool/task-read.ts
+new file mode 100644
+index 000000000..fd08fae47
+--- /dev/null
++++ b/packages/opencode/src/tool/task-read.ts
+@@ -0,0 +1,60 @@
++import z from "zod"
++import { Tool } from "./tool.js"
++import { TaskManager } from "../task/manager.js"
++import { taskReadAfterNotification, standardWarning } from "../task/anti-polling.js"
++import { Permission } from "../permission"
++
++export const TaskReadTool = Tool.define("task_read", {
++  description: `Read the status and result of a delegated background task. ${taskReadAfterNotification()} ${standardWarning()}`,
++  parameters: z.object({
++    id: z.string().describe("The task ID to read (e.g., 'swift-amber-falcon')"),
++    session_id: z
++      .string()
++      .optional()
++      .describe("The session ID where the task was created. Defaults to current session."),
++  }),
++  async execute(params, ctx) {
++    const sessionID = params.session_id ?? ctx.sessionID
++    const task = await TaskManager.get(sessionID, params.id)
++
++    if (!task) {
++      return {
++        title: `Task not found: ${params.id}`,
++        metadata: {},
++        output: `No task found with ID "${params.id}" in session "${sessionID}".`,
++      }
++    }
++
++    // Hard block: prevent polling on running tasks
++    const status = task.status
++    if (status === "queued" || status === "running") {
++      throw new Permission.RejectedError(
++        ctx.sessionID,
++        "polling_forbidden",
++        ctx.callID,
++        {
++          task_id: params.id,
++          task_status: task.status,
++        },
++        "🚫 POLLING IS FORBIDDEN. TASK IS STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
++      )
++    }
++
++    // Format output based on status
++    let output: string
++    switch (status) {
++      case "completed":
++        output = `Status: Completed\nDescription: ${task.description}\nAgent: ${task.agent}\nResult:\n${task.result}`
++        break
++      case "failed":
++        output = `Status: Failed\nDescription: ${task.description}\nAgent: ${task.agent}\nError: ${task.error}`
++        break
++    }
++
++    return {
++      title: `Task ${params.id}: ${status}`,
++      metadata: {},
++      output,
++    }
++  },
++})
+diff --git a/packages/opencode/src/tool/task.ts b/packages/opencode/src/tool/task.ts
+index fdbae41dd..815e60157 100644
+--- a/packages/opencode/src/tool/task.ts
++++ b/packages/opencode/src/tool/task.ts
+@@ -1,15 +1,9 @@
+ import { Tool } from "./tool"
+ import DESCRIPTION from "./task.txt"
+ import z from "zod"
+-import { Session } from "../session"
+-import { Bus } from "../bus"
+-import { MessageV2 } from "../session/message-v2"
+-import { Identifier } from "../id/id"
+ import { Agent } from "../agent/agent"
+-import { SessionPrompt } from "../session/prompt"
+-import { iife } from "@/util/iife"
+-import { defer } from "@/util/defer"
+-import { Config } from "../config/config"
++import { TaskManager } from "../task/manager"
++import { taskOutputReminder, taskReadAfterNotification, systemRules } from "../task/anti-polling"
+ 
+ export const TaskTool = Tool.define("task", async () => {
+   const agents = await Agent.list().then((x) => x.filter((a) => a.mode !== "primary"))
+@@ -18,117 +12,58 @@ export const TaskTool = Tool.define("task", async () => {
+     agents
+       .map((a) => `- ${a.name}: ${a.description ?? "This subagent should only be called manually by the user."}`)
+       .join("\n"),
+-  )
++  ).replace("{systemRules}", systemRules())
+   return {
+     description,
+     parameters: z.object({
+       description: z.string().describe("A short (3-5 words) description of the task"),
+       prompt: z.string().describe("The task for the agent to perform"),
+       subagent_type: z.string().describe("The type of specialized agent to use for this task"),
+-      session_id: z.string().describe("Existing Task session to continue").optional(),
+     }),
+     async execute(params, ctx) {
+-      const agent = await Agent.get(params.subagent_type)
+-      if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
+-      const session = await iife(async () => {
+-        if (params.session_id) {
+-          const found = await Session.get(params.session_id).catch(() => {})
+-          if (found) return found
+-        }
+-
+-        return await Session.create({
+-          parentID: ctx.sessionID,
+-          title: params.description + ` (@${agent.name} subagent)`,
+-        })
+-      })
+-      const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
+-      if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
+-
+-      ctx.metadata({
+-        title: params.description,
+-        metadata: {
+-          sessionId: session.id,
+-        },
+-      })
+-
+-      const messageID = Identifier.ascending("message")
+-      const parts: Record<string, { id: string; tool: string; state: { status: string; title?: string } }> = {}
+-      const unsub = Bus.subscribe(MessageV2.Event.PartUpdated, async (evt) => {
+-        if (evt.properties.part.sessionID !== session.id) return
+-        if (evt.properties.part.messageID === messageID) return
+-        if (evt.properties.part.type !== "tool") return
+-        const part = evt.properties.part
+-        parts[part.id] = {
+-          id: part.id,
+-          tool: part.tool,
+-          state: {
+-            status: part.state.status,
+-            title: part.state.status === "completed" ? part.state.title : undefined,
+-          },
+-        }
+-        ctx.metadata({
+-          title: params.description,
+-          metadata: {
+-            summary: Object.values(parts).sort((a, b) => a.id.localeCompare(b.id)),
+-            sessionId: session.id,
+-          },
+-        })
+-      })
+-
+-      const model = agent.model ?? {
+-        modelID: msg.info.modelID,
+-        providerID: msg.info.providerID,
++      // Guard: ctx.callID must be present
++      if (!ctx.callID) {
++        throw new Error("ctx.callID is missing. This tool requires a valid callID for task tracking.")
+       }
+ 
+-      function cancel() {
+-        SessionPrompt.cancel(session.id)
++      // 1. Validate agent exists
++      const agent = await Agent.get(params.subagent_type)
++      if (!agent) {
++        throw new Error(`Unknown agent type: ${params.subagent_type}`)
+       }
+-      ctx.abort.addEventListener("abort", cancel)
+-      using _ = defer(() => ctx.abort.removeEventListener("abort", cancel))
+-      const promptParts = await SessionPrompt.resolvePromptParts(params.prompt)
+ 
+-      const config = await Config.get()
+-      const result = await SessionPrompt.prompt({
+-        messageID,
+-        sessionID: session.id,
+-        model: {
+-          modelID: model.modelID,
+-          providerID: model.providerID,
+-        },
+-        agent: agent.name,
+-        tools: {
+-          todowrite: false,
+-          todoread: false,
+-          task: false,
+-          ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
+-          ...agent.tools,
+-        },
+-        parts: promptParts,
++      // 2. Start async task
++      const taskId = await TaskManager.start({
++        sessionID: ctx.sessionID,
++        parentMessageID: ctx.messageID,
++        parentPartID: ctx.callID, // The ToolPart ID for streaming updates
++        parentCallID: ctx.callID, // The callID to find parent ToolPart
++        description: params.description,
++        agent: params.subagent_type,
++        prompt: params.prompt,
++        batchId: ctx.messageID, // Use message ID as batch ID - all tasks in same turn share this
+       })
+-      unsub()
+-      const messages = await Session.messages({ sessionID: session.id })
+-      const summary = messages
+-        .filter((x) => x.info.role === "assistant")
+-        .flatMap((msg) => msg.parts.filter((x: any) => x.type === "tool") as MessageV2.ToolPart[])
+-        .map((part) => ({
+-          id: part.id,
+-          tool: part.tool,
+-          state: {
+-            status: part.state.status,
+-            title: part.state.status === "completed" ? part.state.title : undefined,
+-          },
+-        }))
+-      const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
+-
+-      const output = text + "\n\n" + ["<task_metadata>", `session_id: ${session.id}`, "</task_metadata>"].join("\n")
+ 
++      // 3. Return immediately with task info
+       return {
+         title: params.description,
+         metadata: {
+-          summary,
+-          sessionId: session.id,
++          taskId,
++          summary: [] as Array<{
++            id: string
++            tool: string
++            state: { status: string; title?: string }
++          }>, // Will be populated by runner streaming
++          sessionId: undefined as string | undefined, // Will be set by runner when child session starts
+         },
+-        output,
++        output: [
++          `Task started: ${taskId}`,
++          "",
++          "The task is running in the background. You will be notified when it completes.",
++          taskReadAfterNotification(),
++          "",
++          taskOutputReminder(),
++        ].join("\n"),
+       }
+     },
+   }
+diff --git a/packages/opencode/src/tool/task.txt b/packages/opencode/src/tool/task.txt
+index a066757c2..5bc0eb741 100644
+--- a/packages/opencode/src/tool/task.txt
++++ b/packages/opencode/src/tool/task.txt
+@@ -23,6 +23,8 @@ Usage notes:
+ 5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent
+ 6. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+ 
++{systemRules}
++
+ Example usage (NOTE: The agents below are fictional examples for illustration only - use the actual agents listed above):
+ 
+ <example_agent_descriptions>
+diff --git a/packages/opencode/src/util/xml.ts b/packages/opencode/src/util/xml.ts
+new file mode 100644
+index 000000000..7501cb3da
+--- /dev/null
++++ b/packages/opencode/src/util/xml.ts
+@@ -0,0 +1,33 @@
++/**
++ * XML escaping utilities for safe XML/HTML content injection
++ */
++
++const XML_ESCAPE_MAP: Record<string, string> = {
++  "&": "&amp;",
++  "<": "&lt;",
++  ">": "&gt;",
++  '"': "&quot;",
++  "'": "&apos;",
++}
++
++/**
++ * Escape a string for safe use in XML/HTML content.
++ * Replaces: & < > " '
++ */
++export function escape(str: string): string {
++  if (!str) return ""
++  return str.replace(/[&<>"']/g, (char) => XML_ESCAPE_MAP[char] || char)
++}
++
++/**
++ * Wrap content in CDATA section for safe XML inclusion.
++ * Escapes nested ]]> by using the standard CDATA escape sequence.
++ */
++export function cdata(str: string): string {
++  if (!str) return "<![CDATA[]]>"
++
++  // Escape any ]]> sequences by splitting them: ]]> becomes ]]]]><![CDATA[>
++  const escaped = str.replace(/]]>/g, "]]]]><![CDATA[>")
++
++  return `<![CDATA[${escaped}]]>`
++}

@@ -1136,6 +1136,12 @@ export namespace Config {
           prune: z.boolean().optional().describe("Enable pruning of old tool outputs (default: true)"),
         })
         .optional(),
+      task: z
+        .object({
+          maxConcurrent: z.number().int().positive().optional().default(5),
+          timeoutMs: z.number().int().positive().optional().default(900000), // 15 min
+        })
+        .optional(),
       experimental: z
         .object({
           disable_paste_summary: z.boolean().optional(),
