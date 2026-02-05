@@ -128,12 +128,7 @@ export namespace TaskManager {
     // F) Store the task
     await Store.create(task)
 
-    // G) Register with batch if batchId provided
-    if (input.batchId) {
-      registerBatch(input.batchId, input.sessionID, id!, input.description)
-    }
-
-    // H) Track active task for concurrency (add to existing set)
+    // G) Track active task for concurrency (add to existing set)
     activeSet.add(id!)
 
     // Re-check concurrency after insertion to catch races
@@ -150,6 +145,11 @@ export namespace TaskManager {
         }
       }
       throw new Error(`Concurrency limit reached after insertion: ${activeSet.size}/${maxConcurrent} tasks running.`)
+    }
+
+    // H) Register with batch if batchId provided
+    if (input.batchId) {
+      registerBatch(input.batchId, input.sessionID, id!, input.description)
     }
 
     // I) Spawn fire-and-forget runner (no await)
