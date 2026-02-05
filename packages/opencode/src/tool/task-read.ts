@@ -3,13 +3,13 @@ import { Tool } from "./tool.js"
 import { TaskManager } from "../task/manager.js"
 import { taskReadAfterNotification, standardWarning } from "../task/anti-polling.js"
 import { Permission } from "../permission"
+import { Identifier } from "../id/id"
 
 export const TaskReadTool = Tool.define("task_read", {
   description: `Read the status and result of a delegated background task. ${taskReadAfterNotification()} ${standardWarning()}`,
   parameters: z.object({
     id: z.string().describe("The task ID to read (e.g., 'swift-amber-falcon')"),
-    session_id: z
-      .string()
+    session_id: Identifier.schema("session")
       .optional()
       .describe("The session ID where the task was created. Defaults to current session."),
   }),

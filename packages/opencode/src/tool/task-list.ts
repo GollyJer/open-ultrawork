@@ -3,11 +3,14 @@ import { Tool } from "./tool.js"
 import { TaskManager } from "../task/manager.js"
 import { taskOutputReminder, taskReadAfterNotification } from "../task/anti-polling.js"
 import { Permission } from "../permission"
+import { Identifier } from "../id/id"
 
 export const TaskListTool = Tool.define("task_list", {
   description: `List all delegated background tasks in the current session. Shows task IDs, descriptions, and status. ${taskOutputReminder()} ${taskReadAfterNotification()}`,
   parameters: z.object({
-    session_id: z.string().optional().describe("The session ID to list tasks for. Defaults to current session."),
+    session_id: Identifier.schema("session")
+      .optional()
+      .describe("The session ID to list tasks for. Defaults to current session."),
   }),
   async execute(params, ctx) {
     const sessionID = params.session_id ?? ctx.sessionID
