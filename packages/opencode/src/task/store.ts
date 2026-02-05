@@ -55,18 +55,15 @@ export namespace Store {
    */
   export async function listAll(): Promise<Task.Info[]> {
     const result: Task.Info[] = []
-    const sessions = await Storage.list(["task"])
-    for (const sessionPath of sessions) {
-      const items = await Storage.list(sessionPath)
-      for (const item of items) {
-        try {
-          const task = await Storage.read<Task.Info>(item)
-          result.push(task)
-        } catch (e) {
-          // Skip if read fails
-          if (!(e instanceof Storage.NotFoundError)) {
-            throw e
-          }
+    const items = await Storage.list(["task"])
+    for (const item of items) {
+      try {
+        const task = await Storage.read<Task.Info>(item)
+        result.push(task)
+      } catch (e) {
+        // Skip if read fails (e.g., file was deleted concurrently)
+        if (!(e instanceof Storage.NotFoundError)) {
+          throw e
         }
       }
     }

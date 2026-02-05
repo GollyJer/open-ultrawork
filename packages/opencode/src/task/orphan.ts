@@ -1,4 +1,4 @@
-import { Task } from "./types.js"
+import { Task } from "./types"
 import { Store } from "./store.js"
 import { notifyCompletion, notifyBatchCompletion } from "./notification.js"
 import { TaskManager } from "./manager.js"
@@ -16,19 +16,26 @@ export async function initOrphanCleanup(): Promise<void> {
 
   const all = await Store.listAll()
 
+  // Group tasks by batchId (null for non-batched)
+  const batches = new Map<string | null, Task.Info[]>()
   for (const task of all) {
-    // Mark BOTH queued and running tasks as failed
-    if (task.status !== "queued" && task.status !== "running") {
-      continue
+    const key = task.batchId ?? null
+    if (!batches.has(key)) {
+      batches.set(key, [])
     }
+    batches.get(key)!.push(task)
+  }
 
-    log.info("Cleaning orphaned task", {
+  // Process non-batched orphans first
+  const nonBatched = batches.get(null) ?? []
+  for (const task of nonBatched) {
+    if (task.status !== "queued" && task.status !== "running") continue
+
+    log.info("Cleaning orphaned task (non-batched)", {
       taskId: task.id,
       status: task.status,
-      description: task.description,
     })
 
-    // This task was interrupted by server restart
     const failed: Task.TaskFailed = {
       ...task,
       status: "failed",
@@ -39,46 +46,74 @@ export async function initOrphanCleanup(): Promise<void> {
 
     await Store.update(failed)
 
-    // Attempt to notify parent session, but parent may also be gone
-    // Notification errors are expected and should not halt cleanup
     try {
       await notifyCompletion(failed)
     } catch (error) {
-      // Ignore notification errors during cleanup - parent session may be orphaned too
       log.warn("Failed to notify orphaned task", {
         taskId: task.id,
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+  batches.delete(null)
 
-    // Handle batch completion for orphaned tasks
-    if (task.batchId) {
-      // Re-register orphan with batch (batch state lost on restart)
-      TaskManager.registerBatch(task.batchId, task.parentSessionID, task.id, task.description)
+  // Process each batch
+  for (const [batchId, tasks] of batches) {
+    if (!batchId) continue
 
-      // Mark task as failed in batch
-      TaskManager.markTaskFailed(task.batchId, task.id, "Task interrupted by server restart")
+    log.info("Reconstructing batch", { batchId, taskCount: tasks.length })
 
-      // Check if batch is now complete
-      if (TaskManager.isBatchComplete(task.batchId) && !TaskManager.isBatchNotified(task.batchId)) {
-        TaskManager.markBatchNotified(task.batchId)
+    // Step 1: Register ALL tasks in the batch first
+    for (const task of tasks) {
+      TaskManager.registerBatch(batchId, task.parentSessionID, task.id, task.description)
+    }
 
-        const batchResults = TaskManager.getBatchResults(task.batchId)
-        if (batchResults) {
-          try {
-            await notifyBatchCompletion({
-              batchId: batchResults.batchId,
-              parentSessionID: batchResults.parentSessionID,
-              results: batchResults.results,
-            })
-          } catch (error) {
-            log.warn("Failed to send batch completion notification for orphaned tasks", {
-              batchId: task.batchId,
-              error,
-            })
-          }
-          TaskManager.cleanupBatch(task.batchId)
+    // Step 2: Mark each task's final state
+    for (const task of tasks) {
+      if (task.status === "queued" || task.status === "running") {
+        // Orphaned task - mark as failed
+        log.info("Cleaning orphaned task (batched)", {
+          taskId: task.id,
+          batchId,
+          status: task.status,
+        })
+
+        const failed: Task.TaskFailed = {
+          ...task,
+          status: "failed",
+          startedAt: task.status === "running" ? task.startedAt : Date.now(),
+          failedAt: Date.now(),
+          error: "Task interrupted by server restart",
         }
+
+        await Store.update(failed)
+        TaskManager.markTaskFailed(batchId, task.id, "Task interrupted by server restart")
+      } else if (task.status === "completed") {
+        TaskManager.markTaskComplete(batchId, task.id, task.result ?? "")
+      } else if (task.status === "failed") {
+        TaskManager.markTaskFailed(batchId, task.id, task.error ?? "Unknown error")
+      }
+    }
+
+    // Step 3: Send ONE batch notification if complete
+    if (TaskManager.isBatchComplete(batchId) && !TaskManager.isBatchNotified(batchId)) {
+      TaskManager.markBatchNotified(batchId)
+
+      const batchResults = TaskManager.getBatchResults(batchId)
+      if (batchResults) {
+        try {
+          await notifyBatchCompletion({
+            batchId: batchResults.batchId,
+            parentSessionID: batchResults.parentSessionID,
+            results: batchResults.results,
+          })
+        } catch (error) {
+          log.warn("Failed to send batch completion notification", {
+            batchId,
+            error,
+          })
+        }
+        TaskManager.cleanupBatch(batchId)
       }
     }
   }
