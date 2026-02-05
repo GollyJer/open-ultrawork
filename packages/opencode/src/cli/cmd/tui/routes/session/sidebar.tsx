@@ -40,20 +40,26 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
         }
       }
     }
-    return Array.from(groups.entries()).map(([name, parts]) => ({
-      name,
-      parts: parts.map((part) => ({
-        id: part.id,
-        status: () => normalizeStatus(part.state.status),
-        description: () => (part.state.input?.description as string) ?? "",
-        sessionId: () => {
-          const state = part.state
-          if (state.status === "pending") return undefined
-          return (state.metadata?.sessionId as string) ?? undefined
-        },
-      })),
-    }))
+    return Array.from(groups.entries())
+      .map(([name, parts]) => ({
+        name,
+        parts: parts
+          .filter((part) => normalizeStatus(part.state.status) !== "completed")
+          .map((part) => ({
+            id: part.id,
+            status: () => normalizeStatus(part.state.status),
+            description: () => (part.state.input?.description as string) ?? "",
+            sessionId: () => {
+              const state = part.state
+              if (state.status === "pending") return undefined
+              return (state.metadata?.sessionId as string) ?? undefined
+            },
+          })),
+      }))
+      .filter((group) => group.parts.length > 0)
   })
+
+  const activeSubagentCount = createMemo(() => subagentGroups().reduce((sum, group) => sum + group.parts.length, 0))
 
   // Sort MCP servers alphabetically for consistent display order
   const mcpEntries = createMemo(() => Object.entries(sync.data.mcp).sort(([a], [b]) => a.localeCompare(b)))
@@ -135,7 +141,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                   <text fg={theme.text}>
                     <b>Subagents</b>
                     <Show when={!expanded.subagents}>
-                      <span style={{ fg: theme.textMuted }}> ({subagentGroups().length} types)</span>
+                      <span style={{ fg: theme.textMuted }}> ({activeSubagentCount()} active)</span>
                     </Show>
                   </text>
                 </box>
