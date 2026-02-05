@@ -82,10 +82,12 @@ export interface BatchCompletionInput {
   batchId: string
   parentSessionID: string
   results: TerminalBatchResult[]
+  /** @internal For testing only - prevents triggering agent loop */
+  noReply?: boolean
 }
 
 export async function notifyBatchCompletion(input: BatchCompletionInput): Promise<void> {
-  const { batchId, parentSessionID, results } = input
+  const { batchId, parentSessionID, results, noReply } = input
 
   // Build XML for each task
   const tasksXml = results
@@ -108,10 +110,25 @@ export async function notifyBatchCompletion(input: BatchCompletionInput): Promis
 ${tasksXml}
 </batch-complete>`
 
+  // Preserve agent context from latest user message to avoid false plan->build transitions
+  let agent: string | undefined
+  try {
+    const { MessageV2 } = await import("../session/message-v2.js")
+    for await (const msg of MessageV2.stream(parentSessionID)) {
+      if (msg.info.role === "user") {
+        agent = msg.info.agent
+        break
+      }
+    }
+  } catch (error) {
+    log.error("Failed to determine latest user agent", { error })
+  }
+
   // Inject with synthetic: true (hidden from user) and noReply: false (wake agent)
   await SessionPrompt.prompt({
     sessionID: parentSessionID,
-    noReply: false, // Wake the agent!
+    agent, // Preserve agent context to avoid false plan->build switching
+    noReply: noReply ?? false, // Wake the agent! (unless testing)
     parts: [
       {
         type: "text",
