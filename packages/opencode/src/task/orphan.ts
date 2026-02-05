@@ -149,10 +149,13 @@ export async function initOrphanCleanup(): Promise<void> {
         }
         TaskManager.cleanupBatch(batchId)
       }
-    } else if (!changed) {
+    } else if (!changed && skipped.size === 0) {
       // Cleanup batch from memory without notifying (already completed historically)
+      // Only safe when no tasks were skipped - if tasks were skipped, they may still
+      // be running and need the batch tracking to remain intact
       TaskManager.cleanupBatch(batchId)
     }
+    // If !changed && skipped.size > 0, leave batch in memory for active tasks
   }
 
   log.info("Orphan cleanup complete")
