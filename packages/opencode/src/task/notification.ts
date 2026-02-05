@@ -41,7 +41,7 @@ export async function notifyCompletion(task: Task.TaskCompleted | Task.TaskFaile
 <task-id>${escape(id)}</task-id>
 <status>failed</status>
 <summary>Task "${description}" failed</summary>
-<error>${escape(task.error)}</error>
+<error>${cdata(task.error)}</error>
 </task-notification>${antiPollingNote}`
   }
 
