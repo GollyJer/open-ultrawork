@@ -7,6 +7,7 @@ import { Storage } from "../storage/storage"
 import { Config } from "../config/config"
 import { Log } from "../util/log"
 import { initOrphanCleanup } from "./orphan.js"
+import type { TerminalBatchResult } from "./notification.js"
 
 const log = Log.create({ service: "task.manager" })
 
@@ -258,10 +259,12 @@ export namespace TaskManager {
     return {
       batchId,
       parentSessionID: batch.parentSessionID,
-      results: Array.from(batch.results.entries()).map(([id, data]) => ({
-        id,
-        ...data,
-      })),
+      results: Array.from(batch.results.entries())
+        .map(([id, data]) => ({
+          id,
+          ...data,
+        }))
+        .filter((r): r is TerminalBatchResult => r.status !== "pending"),
     }
   }
 

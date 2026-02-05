@@ -76,10 +76,12 @@ export interface BatchResult {
   error?: string
 }
 
+export type TerminalBatchResult = BatchResult & { status: "completed" | "failed" }
+
 export interface BatchCompletionInput {
   batchId: string
   parentSessionID: string
-  results: BatchResult[]
+  results: TerminalBatchResult[]
 }
 
 export async function notifyBatchCompletion(input: BatchCompletionInput): Promise<void> {
