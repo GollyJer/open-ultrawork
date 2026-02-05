@@ -12,6 +12,7 @@ const log = Log.create({ service: "task.orphan" })
  * and marks them as failed with a descriptive error.
  */
 export async function initOrphanCleanup(): Promise<void> {
+  const startedAt = Date.now()
   log.info("Starting orphan cleanup")
 
   const all = await Store.listAll()
@@ -30,6 +31,17 @@ export async function initOrphanCleanup(): Promise<void> {
   const nonBatched = batches.get(null) ?? []
   for (const task of nonBatched) {
     if (task.status !== "queued" && task.status !== "running") continue
+
+    // Skip if task is still active or was created after cleanup started
+    if (TaskManager.isTaskActive(task.id) || task.createdAt >= startedAt) {
+      log.info("Skipping task (active or post-start)", {
+        taskId: task.id,
+        isActive: TaskManager.isTaskActive(task.id),
+        createdAt: task.createdAt,
+        startedAt,
+      })
+      continue
+    }
 
     log.info("Cleaning orphaned task (non-batched)", {
       taskId: task.id,
@@ -63,13 +75,31 @@ export async function initOrphanCleanup(): Promise<void> {
 
     log.info("Reconstructing batch", { batchId, taskCount: tasks.length })
 
-    // Step 1: Register ALL tasks in the batch first
+    // Step 1: Filter out skipped tasks, then register non-skipped tasks
+    const skipped = new Set<string>()
     for (const task of tasks) {
+      if (TaskManager.isTaskActive(task.id) || task.createdAt >= startedAt) {
+        skipped.add(task.id)
+        log.info("Skipping task (active or post-start)", {
+          taskId: task.id,
+          batchId,
+          isActive: TaskManager.isTaskActive(task.id),
+          createdAt: task.createdAt,
+          startedAt,
+        })
+      }
+    }
+
+    // Register only non-skipped tasks
+    for (const task of tasks) {
+      if (skipped.has(task.id)) continue
       TaskManager.registerBatch(batchId, task.parentSessionID, task.id, task.description)
     }
 
-    // Step 2: Mark each task's final state
+    // Step 2: Mark each non-skipped task's final state
     for (const task of tasks) {
+      if (skipped.has(task.id)) continue
+
       if (task.status === "queued" || task.status === "running") {
         // Orphaned task - mark as failed
         log.info("Cleaning orphaned task (batched)", {

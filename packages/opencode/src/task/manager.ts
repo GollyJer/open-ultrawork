@@ -195,6 +195,7 @@ export namespace TaskManager {
   /**
    * Register a task with a batch.
    * Creates the batch if it doesn't exist, increments total count.
+   * Idempotent: if taskId already exists in batch.results, no-op.
    */
   export function registerBatch(batchId: string, parentSessionID: string, taskId: string, description: string) {
     let batch = activeBatches.get(batchId)
@@ -209,36 +210,40 @@ export namespace TaskManager {
       }
       activeBatches.set(batchId, batch)
     }
+    // Idempotent: skip if already registered
+    if (batch.results.has(taskId)) return
     batch.total++
     batch.results.set(taskId, { status: "pending", description })
   }
 
   /**
    * Mark a task in a batch as completed.
+   * Idempotent: only updates if existing entry is present AND status is "pending".
    */
   export function markTaskComplete(batchId: string, taskId: string, result: string) {
     const batch = activeBatches.get(batchId)
     if (!batch) return
-    batch.completed++
     const existing = batch.results.get(taskId)
-    if (existing) {
-      existing.status = "completed"
-      existing.result = result
-    }
+    if (!existing) return
+    if (existing.status !== "pending") return
+    batch.completed++
+    existing.status = "completed"
+    existing.result = result
   }
 
   /**
    * Mark a task in a batch as failed.
+   * Idempotent: only updates if existing entry is present AND status is "pending".
    */
   export function markTaskFailed(batchId: string, taskId: string, error: string) {
     const batch = activeBatches.get(batchId)
     if (!batch) return
-    batch.failed++
     const existing = batch.results.get(taskId)
-    if (existing) {
-      existing.status = "failed"
-      existing.error = error
-    }
+    if (!existing) return
+    if (existing.status !== "pending") return
+    batch.failed++
+    existing.status = "failed"
+    existing.error = error
   }
 
   /**
@@ -291,5 +296,16 @@ export namespace TaskManager {
    */
   export function cleanupBatch(batchId: string) {
     activeBatches.delete(batchId)
+  }
+
+  /**
+   * Check if a task is currently active (running).
+   * Checks the activeTasks map across all sessions.
+   */
+  export function isTaskActive(taskId: string): boolean {
+    for (const activeSet of activeTasks.values()) {
+      if (activeSet.has(taskId)) return true
+    }
+    return false
   }
 }
