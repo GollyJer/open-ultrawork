@@ -4,6 +4,7 @@ import { escape, cdata } from "../util/xml"
 import { Log } from "../util/log"
 import { TaskManager } from "./manager.js"
 import { reminderRemaining, reminderFinal } from "./anti-polling.js"
+import { MessageV2 } from "../session/message-v2.js"
 
 const log = Log.create({ service: "task.notification" })
 
@@ -112,16 +113,11 @@ ${tasksXml}
 
   // Preserve agent context from latest user message to avoid false plan->build transitions
   let agent: string | undefined
-  try {
-    const { MessageV2 } = await import("../session/message-v2.js")
-    for await (const msg of MessageV2.stream(parentSessionID)) {
-      if (msg.info.role === "user") {
-        agent = msg.info.agent
-        break
-      }
+  for await (const msg of MessageV2.stream(parentSessionID)) {
+    if (msg.info.role === "user") {
+      agent = msg.info.agent
+      break
     }
-  } catch (error) {
-    log.error("Failed to determine latest user agent", { error })
   }
 
   // Inject with synthetic: true (hidden from user) and noReply: false (wake agent)
