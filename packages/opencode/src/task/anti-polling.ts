@@ -5,10 +5,10 @@
 
 /**
  * Standard warning for tool outputs/descriptions.
- * @returns "🚫 DO NOT POLL. YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE>."
+ * @returns "🚫 DO NOT POLL. YOU WILL BE NOTIFIED VIA <batch-complete>."
  */
 export function standardWarning(): string {
-  return "🚫 DO NOT POLL. YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE>."
+  return "🚫 DO NOT POLL. YOU WILL BE NOTIFIED VIA <batch-complete>."
 }
 
 /**
@@ -40,7 +40,7 @@ export function reminderFinal(): string {
   return [
     "🚫 DO NOT POLL TASK_READ OR TASK_LIST FOR FUTURE TASKS.",
     taskReadAfterNotification(),
-    "YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE> WHEN ALL TASKS FINISH.",
+    "YOU WILL BE NOTIFIED VIA <batch-complete> WHEN ALL TASKS FINISH.",
   ].join(" ")
 }
 
@@ -58,6 +58,6 @@ export function taskOutputReminder(): string {
  * @returns Multi-line system prompt block
  */
 export function systemRules(): string {
-  return `🚫 NEVER POLL TASK_READ OR TASK_LIST TO CHECK COMPLETION. YOU WILL BE NOTIFIED VIA <BATCH-COMPLETE> WHEN ALL TASKS FINISH.
+  return `🚫 NEVER POLL TASK_READ OR TASK_LIST TO CHECK COMPLETION. YOU WILL BE NOTIFIED VIA <batch-complete> WHEN ALL TASKS FINISH.
 ❌ DO NOT POLL TASK_READ OR TASK_LIST - CONTINUE PRODUCTIVE WORK WHILE TASKS RUN IN THE BACKGROUND.`
 }

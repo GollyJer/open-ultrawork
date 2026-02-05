@@ -31,7 +31,7 @@ export const TaskListTool = Tool.define("task_list", {
         {
           running_count: tasks.filter((d) => d.status === "queued" || d.status === "running").length,
         },
-        "🚫 POLLING IS FORBIDDEN. TASKS ARE STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
+        "🚫 POLLING IS FORBIDDEN. TASKS ARE STILL RUNNING. WAIT FOR <batch-complete>.",
       )
     }
 

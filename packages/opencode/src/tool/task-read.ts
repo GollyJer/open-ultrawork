@@ -36,7 +36,7 @@ export const TaskReadTool = Tool.define("task_read", {
           task_id: params.id,
           task_status: task.status,
         },
-        "🚫 POLLING IS FORBIDDEN. TASK IS STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
+        "🚫 POLLING IS FORBIDDEN. TASK IS STILL RUNNING. WAIT FOR <batch-complete>.",
       )
     }
 
