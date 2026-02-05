@@ -109,6 +109,28 @@ export namespace TaskRunner {
         parentPart = parentMessage.parts.find(
           (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === task.parentCallID,
         )
+
+        // Set parent part to running state with sessionId metadata
+        if (parentPart) {
+          await Session.updatePart({
+            id: parentPart.id,
+            messageID: task.parentMessageID,
+            sessionID: task.parentSessionID,
+            type: "tool",
+            tool: parentPart.tool,
+            callID: parentPart.callID,
+            state: {
+              status: "running",
+              input: parentPart.state.input,
+              title: task.description,
+              metadata: {
+                taskId: task.id,
+                sessionId: childSession.id,
+              },
+              time: { start: task.createdAt },
+            },
+          })
+        }
       } catch (error) {
         log.warn("Could not find parent message/part for streaming updates", {
           taskId: task.id,
@@ -134,41 +156,40 @@ export namespace TaskRunner {
           },
         }
 
-        // Update parent ToolPart with streaming progress (only update metadata)
+        // Update parent ToolPart with streaming progress - keep status as "running"
         if (parentPart) {
           try {
-            // Only update if part is in a state that has these properties
-            if (
-              parentPart.state.status === "completed" ||
-              parentPart.state.status === "running" ||
-              parentPart.state.status === "error"
-            ) {
-              const existingTime = parentPart.state.time
-              const hasEnd = "end" in existingTime
+            // Note: Event ordering ensures completion update runs after streaming updates
+            // are unsubscribed, so completion always wins. The status guard is defensive.
+            // Re-fetch latest parent part to avoid overwriting completed/error states
+            const latestMessage = await MessageV2.get({
+              sessionID: task.parentSessionID,
+              messageID: task.parentMessageID,
+            })
 
+            const latestPart = latestMessage.parts.find(
+              (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === task.parentCallID,
+            )
+
+            // Only update if the latest part is still running (guard against stale state)
+            if (latestPart && latestPart.state.status === "running") {
               await Session.updatePart({
-                id: parentPart.id,
+                id: latestPart.id,
                 messageID: task.parentMessageID,
                 sessionID: task.parentSessionID,
                 type: "tool",
-                tool: parentPart.tool,
-                callID: parentPart.callID,
+                tool: latestPart.tool,
+                callID: latestPart.callID,
                 state: {
-                  status: "completed", // Keep status as completed (per requirement)
-                  input: parentPart.state.input,
-                  output: parentPart.state.status === "completed" ? parentPart.state.output : "",
-                  title:
-                    parentPart.state.status === "completed" || parentPart.state.status === "running"
-                      ? parentPart.state.title || task.description
-                      : task.description,
+                  status: "running",
+                  input: latestPart.state.input,
+                  title: task.description,
                   metadata: {
-                    ...(parentPart.state.metadata || {}),
+                    taskId: task.id,
                     summary: Object.values(parts).sort((a, b) => a.id.localeCompare(b.id)),
                     sessionId: childSession.id,
                   },
-                  time: hasEnd
-                    ? (existingTime as { start: number; end: number })
-                    : { start: existingTime.start, end: Date.now() },
+                  time: { start: task.createdAt },
                 },
               })
             }

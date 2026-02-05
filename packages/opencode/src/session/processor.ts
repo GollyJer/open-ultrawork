@@ -378,6 +378,15 @@ export namespace SessionProcessor {
           }
           const p = await MessageV2.parts(input.assistantMessage.id)
           for (const part of p) {
+            // Skip async task tools with active child sessions
+            if (
+              part.type === "tool" &&
+              part.tool === "task" &&
+              part.state.status === "running" &&
+              part.state.metadata?.sessionId
+            ) {
+              continue
+            }
             if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
               await Session.updatePart({
                 ...part,

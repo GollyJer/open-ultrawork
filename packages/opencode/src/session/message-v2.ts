@@ -573,15 +573,29 @@ export namespace MessageV2 {
               })
             // Handle pending/running tool calls to prevent dangling tool_use blocks
             // Anthropic/Claude APIs require every tool_use to have a corresponding tool_result
-            if (part.state.status === "pending" || part.state.status === "running")
-              assistantMessage.parts.push({
-                type: ("tool-" + part.tool) as `tool-${string}`,
-                state: "output-error",
-                toolCallId: part.callID,
-                input: part.state.input,
-                errorText: "[Tool execution was interrupted]",
-                ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
-              })
+            if (part.state.status === "pending" || part.state.status === "running") {
+              // Async task tools with active child sessions get non-error message
+              if (part.tool === "task" && part.state.status === "running" && part.state.metadata?.sessionId) {
+                assistantMessage.parts.push({
+                  type: ("tool-" + part.tool) as `tool-${string}`,
+                  state: "output-available",
+                  toolCallId: part.callID,
+                  input: part.state.input,
+                  output:
+                    "Task running asynchronously; results will arrive via <batch-complete>. Continue productive work and DO NOT poll!",
+                  ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
+                })
+              } else {
+                assistantMessage.parts.push({
+                  type: ("tool-" + part.tool) as `tool-${string}`,
+                  state: "output-error",
+                  toolCallId: part.callID,
+                  input: part.state.input,
+                  errorText: "[Tool execution was interrupted]",
+                  ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
+                })
+              }
+            }
           }
           if (part.type === "reasoning") {
             assistantMessage.parts.push({
