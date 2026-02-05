@@ -75,6 +75,9 @@ export async function initOrphanCleanup(): Promise<void> {
 
     log.info("Reconstructing batch", { batchId, taskCount: tasks.length })
 
+    // Track if cleanup actually changed anything
+    let changed = false
+
     // Step 1: Filter out skipped tasks, then register non-skipped tasks
     const skipped = new Set<string>()
     for (const task of tasks) {
@@ -102,6 +105,7 @@ export async function initOrphanCleanup(): Promise<void> {
 
       if (task.status === "queued" || task.status === "running") {
         // Orphaned task - mark as failed
+        changed = true
         log.info("Cleaning orphaned task (batched)", {
           taskId: task.id,
           batchId,
@@ -125,8 +129,8 @@ export async function initOrphanCleanup(): Promise<void> {
       }
     }
 
-    // Step 3: Send ONE batch notification if complete
-    if (TaskManager.isBatchComplete(batchId) && !TaskManager.isBatchNotified(batchId)) {
+    // Step 3: Send ONE batch notification if complete AND cleanup changed something
+    if (changed && TaskManager.isBatchComplete(batchId) && !TaskManager.isBatchNotified(batchId)) {
       TaskManager.markBatchNotified(batchId)
 
       const batchResults = TaskManager.getBatchResults(batchId)
@@ -145,6 +149,9 @@ export async function initOrphanCleanup(): Promise<void> {
         }
         TaskManager.cleanupBatch(batchId)
       }
+    } else if (!changed) {
+      // Cleanup batch from memory without notifying (already completed historically)
+      TaskManager.cleanupBatch(batchId)
     }
   }
 
