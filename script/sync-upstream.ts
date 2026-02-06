@@ -17,7 +17,7 @@ async function output(key: string, value: string) {
     console.log(`[output] ${key}=${value}`)
     return
   }
-  await Bun.write(Bun.file(path), `${key}=${value}\n`, { append: true } as any)
+  await $`echo ${key}=${value} >> ${path}`
 }
 
 async function main() {
@@ -54,7 +54,7 @@ async function main() {
   const syncBranch = `sync/upstream-${date}`
 
   console.log(`📝 Creating sync branch: ${syncBranch}`)
-  await $`git checkout -b ${syncBranch}`
+  await $`git checkout -B ${syncBranch}`
 
   const mergeResult = await $`git merge dev --no-edit`.nothrow()
   const hasConflicts = mergeResult.exitCode !== 0
@@ -62,10 +62,8 @@ async function main() {
   if (hasConflicts) {
     console.log("⚠️ Conflicts detected, aborting merge")
     await $`git merge --abort`
-    await $`git checkout ultrawork/dev`
-    // Push empty sync branch for PR creation
-    await $`git branch -D ${syncBranch}`
-    await $`git checkout -b ${syncBranch}`
+    // Reset sync branch to dev so PR shows incoming changes from dev -> ultrawork/dev
+    await $`git reset --hard dev`
   } else {
     console.log("✅ Clean merge")
   }
