@@ -17,7 +17,8 @@ async function output(key: string, value: string) {
     console.log(`[output] ${key}=${value}`)
     return
   }
-  await Bun.write(Bun.file(path), `${key}=${value}\n`, { append: true } as any)
+  // Use shell redirection to append (Bun.write does not support append mode)
+  await $`echo ${`${key}=${value}`} >> ${path}`.quiet()
 }
 
 async function main() {
