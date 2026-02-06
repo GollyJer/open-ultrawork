@@ -60,8 +60,7 @@ async function main() {
   const hasConflicts = mergeResult.exitCode !== 0
 
   if (hasConflicts) {
-    console.log("⚠️ Conflicts detected, aborting merge")
-    await $`git merge --abort`
+    console.log("⚠️ Merge failed or has conflicts, resetting sync branch")
     // Reset sync branch to dev so PR shows incoming changes from dev -> ultrawork/dev
     await $`git reset --hard dev`
   } else {
