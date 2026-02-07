@@ -138,6 +138,8 @@ export namespace TaskManager {
 
     // Re-check concurrency after insertion to catch races
     if (activeSet.size > maxConcurrent) {
+      const size = activeSet.size
+
       // Clean up - always remove from active set, attempt storage cleanup
       try {
         await Store.remove(input.sessionID, id!)
@@ -149,7 +151,7 @@ export namespace TaskManager {
           activeTasks.delete(input.sessionID)
         }
       }
-      throw new Error(`Concurrency limit reached after insertion: ${activeSet.size}/${maxConcurrent} tasks running.`)
+      throw new Error(`Concurrency limit reached after insertion: ${size}/${maxConcurrent} tasks running.`)
     }
 
     // H) Register with batch if batchId provided

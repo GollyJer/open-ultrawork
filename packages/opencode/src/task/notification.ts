@@ -35,7 +35,7 @@ export async function notifyCompletion(task: Task.TaskCompleted | Task.TaskFaile
 <task-id>${escape(id)}</task-id>
 <status>complete</status>
 <summary>Task "${description}" completed successfully</summary>
-<result>${cdata(task.result)}</result>
+<result>${cdata(truncateResult(task.result))}</result>
 </task-notification>${antiPollingNote}`
   } else {
     message = `<task-notification>
@@ -121,16 +121,24 @@ ${tasksXml}
   }
 
   // Inject with synthetic: true (hidden from user) and noReply: false (wake agent)
-  await SessionPrompt.prompt({
-    sessionID: parentSessionID,
-    agent, // Preserve agent context to avoid false plan->build switching
-    noReply: noReply ?? false, // Wake the agent! (unless testing)
-    parts: [
-      {
-        type: "text",
-        text: message,
-        synthetic: true, // Hidden from user, visible to agent
-      },
-    ],
-  })
+  try {
+    await SessionPrompt.prompt({
+      sessionID: parentSessionID,
+      agent, // Preserve agent context to avoid false plan->build switching
+      noReply: noReply ?? false, // Wake the agent! (unless testing)
+      parts: [
+        {
+          type: "text",
+          text: message,
+          synthetic: true, // Hidden from user, visible to agent
+        },
+      ],
+    })
+  } catch (error) {
+    log.error("Failed to send batch completion notification", {
+      batchId,
+      parentSessionID,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }

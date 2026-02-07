@@ -8,7 +8,7 @@ import { Identifier } from "../id/id"
 import { Config } from "../config/config"
 import { Task } from "./types"
 import { Store } from "./store"
-import { notifyBatchCompletion } from "./notification"
+import { notifyBatchCompletion, type BatchCompletionInput } from "./notification"
 import { TaskManager } from "./manager"
 
 /**
@@ -16,12 +16,13 @@ import { TaskManager } from "./manager"
  * Marks the task as complete/failed in its batch, then checks if the entire batch
  * is complete. If so, sends consolidated batch notification.
  */
-async function handleBatchCompletion(
+export async function handleBatchCompletion(
   batchId: string | undefined,
   taskId: string,
   status: "completed" | "failed",
   resultOrError: string,
   description: string,
+  notify: (input: BatchCompletionInput) => Promise<void> = notifyBatchCompletion,
 ): Promise<void> {
   // If no batchId, fall back to individual notification for backwards compatibility
   if (!batchId) {
@@ -35,23 +36,30 @@ async function handleBatchCompletion(
     TaskManager.markTaskFailed(batchId, taskId, resultOrError)
   }
 
-  // Check if batch is complete and not already notified
-  if (TaskManager.isBatchComplete(batchId) && !TaskManager.isBatchNotified(batchId)) {
-    const batchResults = TaskManager.getBatchResults(batchId)
-    if (batchResults) {
-      try {
-        await notifyBatchCompletion({
-          batchId: batchResults.batchId,
-          parentSessionID: batchResults.parentSessionID,
-          results: batchResults.results,
-        })
-        // Only mark notified on SUCCESS
-        TaskManager.markBatchNotified(batchId)
-      } finally {
-        // Always cleanup, even if notification fails
-        TaskManager.cleanupBatch(batchId)
-      }
-    }
+  if (!TaskManager.isBatchComplete(batchId)) {
+    return
+  }
+
+  if (TaskManager.isBatchNotified(batchId)) {
+    return
+  }
+
+  const batchResults = TaskManager.getBatchResults(batchId)
+  if (!batchResults) {
+    return
+  }
+
+  // Claim notification before async send to avoid duplicate concurrent notifications.
+  TaskManager.markBatchNotified(batchId)
+
+  try {
+    await notify({
+      batchId: batchResults.batchId,
+      parentSessionID: batchResults.parentSessionID,
+      results: batchResults.results,
+    })
+  } finally {
+    TaskManager.cleanupBatch(batchId)
   }
 }
 

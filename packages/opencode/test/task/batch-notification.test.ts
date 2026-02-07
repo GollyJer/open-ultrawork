@@ -7,8 +7,35 @@ import { tmpdir } from "../fixture/fixture"
 import { Provider } from "../../src/provider/provider"
 import { SessionPrompt } from "../../src/session/prompt"
 import { notifyBatchCompletion } from "../../src/task/notification"
+import { handleBatchCompletion } from "../../src/task/runner"
+import { TaskManager } from "../../src/task/manager"
 
 describe("batch-complete agent preservation", () => {
+  test("handleBatchCompletion sends one batch notification for concurrent duplicate completion", async () => {
+    const batchId = `race-batch-${Date.now()}`
+    const taskId = `race-task-${Date.now()}`
+    TaskManager.registerBatch(batchId, "session-race", taskId, "Race task")
+
+    let calls = 0
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const notify = async () => {
+      calls++
+      await gate
+    }
+
+    const a = handleBatchCompletion(batchId, taskId, "completed", "ok", "Race task", notify)
+    const b = handleBatchCompletion(batchId, taskId, "completed", "ok", "Race task", notify)
+
+    await Bun.sleep(0)
+    expect(calls).toBe(1)
+
+    release()
+    await Promise.all([a, b])
+  })
+
   test("notifyBatchCompletion preserves plan agent from latest user message", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({

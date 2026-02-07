@@ -17,7 +17,7 @@ When NOT to use the Task tool:
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses
-2. **Tasks run asynchronously.** The tool returns immediately with a task ID. You will receive a `<batch-complete>` when the task completes.
+2. **Tasks run asynchronously.** The tool returns immediately with a task ID. You will receive one `<batch-complete>` notification when that task's batch completes (for a single-task batch, that's when that one task finishes).
 3. **Do NOT poll or wait.** Continue productive work while tasks run in the background. You will be notified automatically.
 4. Use `task_read(id)` ONLY ONCE after receiving a completion notification if you need to retrieve the full result again.
 5. Each agent invocation is stateless. Your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final message.

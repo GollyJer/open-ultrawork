@@ -28,7 +28,7 @@ export function reminderRemaining(remainingCount: number): string {
   return [
     "⚠️ Do NOT poll task_read or task_list - continue productive work.",
     taskReadAfterNotification(),
-    "You WILL be notified as each task completes.",
+    `You still have ${remainingCount} task${remainingCount === 1 ? "" : "s"} running or queued, and you'll be notified when each completes.`,
   ].join(" ")
 }
 
