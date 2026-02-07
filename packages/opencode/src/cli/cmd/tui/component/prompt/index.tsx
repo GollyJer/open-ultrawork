@@ -206,7 +206,6 @@ export function Prompt(props: PromptProps) {
         enabled: status().type !== "idle",
         onSelect: (dialog) => {
           if (autocomplete.visible) return
-          if (!input.focused) return
           // TODO: this should be its own command
           if (store.mode === "shell") {
             setStore("mode", "normal")

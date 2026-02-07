@@ -14,6 +14,7 @@ import { Agent } from "../../agent/agent"
 import { Snapshot } from "@/snapshot"
 import { Log } from "../../util/log"
 import { PermissionNext } from "@/permission/next"
+import { TaskManager } from "../../task/manager"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 
@@ -379,7 +380,9 @@ export const SessionRoutes = lazy(() =>
         }),
       ),
       async (c) => {
-        SessionPrompt.cancel(c.req.valid("param").sessionID)
+        const sessionID = c.req.valid("param").sessionID
+        SessionPrompt.cancel(sessionID)
+        await TaskManager.cancel(sessionID)
         return c.json(true)
       },
     )

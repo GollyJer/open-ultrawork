@@ -3,6 +3,7 @@ import { Store } from "./store"
 import { generateTaskId } from "./id"
 import { TaskRunner } from "./runner"
 import { Session } from "../session"
+import { SessionPrompt } from "../session/prompt"
 import { Storage } from "../storage/storage"
 import { Config } from "../config/config"
 import { Log } from "../util/log"
@@ -190,6 +191,25 @@ export namespace TaskManager {
    */
   export async function list(sessionID: string): Promise<Task.Info[]> {
     return Store.list(sessionID)
+  }
+
+  /**
+   * Cancel active child sessions for running tasks in a parent session.
+   * Safe and idempotent for missing/non-running tasks.
+   */
+  export async function cancel(sessionID: string): Promise<void> {
+    const set = activeTasks.get(sessionID)
+    if (!set || set.size === 0) return
+
+    await Promise.all(
+      [...set].map(async (taskID) => {
+        const task = await Store.get(sessionID, taskID)
+        if (!task) return
+        if (task.status !== "running") return
+        if (!task.childSessionID) return
+        SessionPrompt.cancel(task.childSessionID)
+      }),
+    )
   }
 
   /**
