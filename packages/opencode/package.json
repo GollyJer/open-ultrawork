@@ -20,7 +20,7 @@
   },
   "bin": {
     "opencode": "./bin/opencode",
-    "ultrawork": "./bin/ultrawork"
+    "ultracode": "./bin/ultracode"
   },
   "randomField": "this-is-a-random-value-12345",
   "exports": {
